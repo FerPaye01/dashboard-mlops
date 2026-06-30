@@ -1,0 +1,8 @@
+{
+  "NVIDIA RTX 4090 (24GB VRAM)": {"vram": 24.0, "bw": 1008.0, "tflops": 82.6},
+  "NVIDIA A100 (80GB VRAM)": {"vram": 80.0, "bw": 2039.0, "tflops": 312.0},
+  "NVIDIA H100 (80GB VRAM)": {"vram": 80.0, "bw": 3350.0, "tflops": 989.0},
+  "NVIDIA L4 (24GB VRAM)": {"vram": 24.0, "bw": 300.0, "tflops": 120.0},
+  "NVIDIA T4 (16GB VRAM)": {"vram": 16.0, "bw": 320.0, "tflops": 65.0},
+  "Personalizado (Manual)": {"vram": 24.0, "bw": 900.0, "tflops": 80.0}
+}
