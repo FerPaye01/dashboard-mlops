@@ -457,6 +457,7 @@ def update_rows_per_page():
 
 # --- 1.2 Cálculos de Simulación (si hay modelo validado) ---
 vram_calc = None
+model_metadata = None
 physical_servers_m = 0
 available_vram = 0.0
 offered_traffic_a = 0.0
@@ -1205,6 +1206,19 @@ st.write("---")
 if vram_calc is None:
     st.info("💡 Por favor, cargue el catálogo y valide un modelo para ver las fórmulas y desgloses de simulación.")
     st.stop()
+    vram_calc = {
+        "base_vram_gb": 0.0,
+        "total_kv_cache_gb": 0.0,
+        "cuda_overhead_gb": 0.0,
+        "activation_overhead_gb": 0.0,
+        "total_estimated_vram_gb": 0.0,
+        "kv_cache_per_user_gb": 0.0
+    }
+    model_metadata = {
+        "layers": 0,
+        "num_kv_heads": 0,
+        "attention_type": "N/A"
+    }
 
 tab1, tab2, tab3, tab4 = st.tabs(["📊 Dimensionamiento de VRAM", "🧮 Simulación de Colas (Erlang-C)", "🔌 Integración de APIs de Entrada", "🛠️ Pipeline de Datos Medallion"])
 
