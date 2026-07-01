@@ -40,6 +40,11 @@ st.markdown("""
         font-size: 0.85rem !important;
     }
     
+    /* Asegurar que los iconos de Streamlit (Material Symbols/Icons) no se rompan por Poppins */
+    [data-testid="stIcon"], .notranslate, [class*="notranslate"] {
+        font-family: 'Material Symbols Outlined', 'Material Symbols Rounded', 'Material Icons' !important;
+    }
+    
     /* Controlar tamaños de fuentes de cabeceras */
     h1, h2, h3, h4, h5, h6 {
         font-family: 'Poppins', sans-serif !important;
@@ -880,27 +885,32 @@ else:
             
         vram_peak = (pesos_estaticos + activaciones + kv_term) * 1.20
         
-        # 2. Filtrado Fisico (Eliminacion)
+        # 2. Evaluación de Compatibilidad (Sin Eliminación)
         is_compatible = True
         reason = "Compatible"
         dep_choice = st.session_state.deployment_type
         
         available_vram = st.session_state.server_vram * st.session_state.gpus_tp * st.session_state.gpu_memory_utilization
         
-        # Si se hospeda localmente o si el usuario restringe a local
-        if hosting == "Solo Local (Privado / GGUF)" or (dep_choice == "Solo Local (Privado / GGUF)"):
-            if vram_peak > available_vram:
-                is_compatible = False
-                reason = f"VRAM Excedida ({vram_peak:.1f} GB > {available_vram:.1f} GB)"
-        elif dep_choice == "Ambos (Híbrido)" and hosting == "Both":
-            # Si el modelo soporta local pero excede la VRAM física disponible, se asume alojamiento Cloud
-            if vram_peak > available_vram:
-                hosting = "Solo Cloud (APIs / OpenRouter) [Fallback]"
-                vram_peak = 0.0
-                
-        # Regla de Eliminación Física: si no es compatible bajo el filtro del usuario, se elimina de la lista
-        if not is_compatible:
-            continue
+        # Verificar compatibilidad de tipo de alojamiento
+        if dep_choice == "Solo Local (Privado / GGUF)" and hosting == "Solo Cloud (APIs / OpenRouter)":
+            is_compatible = False
+            reason = "⚠️ Requiere Cloud"
+        elif dep_choice == "Solo Cloud (APIs / OpenRouter)" and hosting == "Solo Local (Privado / GGUF)":
+            is_compatible = False
+            reason = "⚠️ Requiere Local"
+        
+        # Verificar límite de VRAM física para hosting local
+        if is_compatible:
+            if hosting == "Solo Local (Privado / GGUF)" or (dep_choice == "Solo Local (Privado / GGUF)"):
+                if vram_peak > available_vram:
+                    is_compatible = False
+                    reason = "⚠️ VRAM Excedida"
+            elif dep_choice == "Ambos (Híbrido)" and hosting == "Both":
+                # Si el modelo soporta local pero excede la VRAM física disponible, se asume alojamiento Cloud
+                if vram_peak > available_vram:
+                    hosting = "Solo Cloud (APIs / OpenRouter) [Fallback]"
+                    vram_peak = 0.0
             
         # 3. Calcular sub-puntajes normalizados (0-100)
         ifeval_raw = row.get("ifeval")
@@ -1002,11 +1012,12 @@ else:
         processed_models.append({
             "Modelo": row["name"],
             "Alojamiento": hosting,
+            "Compatibilidad": reason,
             "Atención": attention_type,
             "Calidad Legal (IFEval)": ifeval_val,
             "MMLU": mmlu_val,
             "GPQA (Raz. Científico)": gpqa_val,
-            "VRAM Peak Est.": f"{vram_peak:.1f} GB" if vram_peak > 0 else "N/A (Cloud)",
+            "VRAM Peak Est.": f"⚠️ {vram_peak:.1f} GB" if ("VRAM Excedida" in reason) else (f"{vram_peak:.1f} GB" if vram_peak > 0 else "N/A (Cloud)"),
             "Velocidad (Tok/s)": f"{speed_val:.1f}",
             "Latencia TTFT": f"{ttft_val:.0f} ms",
             "Coste Est. ($/M)": f"${(row['cost_input_per_m'] + row['cost_output_per_m'])/2:.3f}" if row["cost_input_per_m"] > 0 else "Gratis",
@@ -1014,15 +1025,21 @@ else:
             "_score_raw": total_score,
             "_speed_raw": speed_val,
             "_quality_raw": quality_score,
-            "_efficiency_raw": efficiency_score
+            "_efficiency_raw": efficiency_score,
+            "_compatible_raw": 1 if is_compatible else 0
         })
         
     if not processed_models:
-        st.warning("⚠️ Todos los modelos del catálogo local exceden el límite de VRAM. Incremente la VRAM física en el sidebar o cambie a Cloud/Híbrido.")
+        st.warning("⚠️ El catálogo de modelos está vacío. Presione el botón '🔄 Ejecutar Pipeline (Actualización Completa)' en la pestaña correspondiente.")
     else:
+        # Si ningún modelo es compatible con el hardware, mostrar advertencia general
+        has_compatible = any(m["_compatible_raw"] == 1 for m in processed_models)
+        if not has_compatible:
+            st.warning("⚠️ Todos los modelos del catálogo local exceden el límite de VRAM. Incremente la VRAM física en el sidebar o cambie a Cloud/Híbrido.")
+            
         df_catalog = pd.DataFrame(processed_models).sort_values(
-            by=["_score_raw", "_speed_raw", "_quality_raw", "_efficiency_raw"],
-            ascending=[False, False, False, False]
+            by=["_compatible_raw", "_score_raw", "_speed_raw", "_quality_raw", "_efficiency_raw"],
+            ascending=[False, False, False, False, False]
         )
         
         # Identificar el modelo recomendado en la fila número 1 de forma segura mediante iloc
@@ -1203,139 +1220,129 @@ st.write("---")
 
 
 # Sección de Desglose Matemático y Fórmulas
-if vram_calc is None:
-    st.info("💡 Por favor, cargue el catálogo y valide un modelo para ver las fórmulas y desgloses de simulación.")
-    st.stop()
-    vram_calc = {
-        "base_vram_gb": 0.0,
-        "total_kv_cache_gb": 0.0,
-        "cuda_overhead_gb": 0.0,
-        "activation_overhead_gb": 0.0,
-        "total_estimated_vram_gb": 0.0,
-        "kv_cache_per_user_gb": 0.0
-    }
-    model_metadata = {
-        "layers": 0,
-        "num_kv_heads": 0,
-        "attention_type": "N/A"
-    }
-
 tab1, tab2, tab3, tab4 = st.tabs(["📊 Dimensionamiento de VRAM", "🧮 Simulación de Colas (Erlang-C)", "🔌 Integración de APIs de Entrada", "🛠️ Pipeline de Datos Medallion"])
 
 with tab1:
     st.markdown("#### Desglose de Consumo de VRAM para Inferencia Dinámica")
-    
-    # Crear un DataFrame para graficar el consumo de VRAM
-    vram_breakdown_data = {
-        "Concepto": [
-            "Pesos del Modelo (Base)",
-            "Caché KV (Total de Usuarios)",
-            "Sobrecarga de CUDA",
-            "Sobrecarga de Activaciones",
-            "VRAM Libre / Remanente"
-        ],
-        "VRAM (GB)": [
-            vram_calc["base_vram_gb"],
-            vram_calc["total_kv_cache_gb"],
-            vram_calc["cuda_overhead_gb"],
-            vram_calc["activation_overhead_gb"],
-            max(0.0, available_vram - vram_calc["total_estimated_vram_gb"])
-        ]
-    }
-    df_vram = pd.DataFrame(vram_breakdown_data)
-    
-    col_chart, col_explain = st.columns([2, 1])
-    with col_chart:
-        st.bar_chart(df_vram.set_index("Concepto"), y="VRAM (GB)", color="#0039AA")
-    
-    with col_explain:
-        st.markdown("**Fórmulas de Memoria KV Cache Dinámica:**")
-        st.latex(r"V_{\text{KV}} = 2 \times N_{\text{layers}} \times N_{\text{kv\_heads}} \times d_{\text{head}} \times L_{\text{context}} \times B_{\text{bytes}}")
-        st.markdown(f"""
-        *   **Capas ($N_{{\text{{layers}}}}$):** `{model_metadata['layers']}`
-        *   **KV Heads ($N_{{\text{{kv\_heads}}}}$):** `{model_metadata['num_kv_heads']}` (Atención `{model_metadata['attention_type']}`)
-        *   **Contexto ($L_{{\text{{context}}}}$):** `{st.session_state.context_length:,}` tokens
-        *   **Modelo de Referencia:** `{st.session_state.validated_model}`
-        """)
+    if vram_calc is None or model_metadata is None:
+        st.info("💡 Por favor, ejecute el pipeline de datos (Capa Plata) y seleccione/valide un modelo para ver las fórmulas y desgloses de simulación.")
+    else:
+        # Crear un DataFrame para graficar el consumo de VRAM
+        vram_breakdown_data = {
+            "Concepto": [
+                "Pesos del Modelo (Base)",
+                "Caché KV (Total de Usuarios)",
+                "Sobrecarga de CUDA",
+                "Sobrecarga de Activaciones",
+                "VRAM Libre / Remanente"
+            ],
+            "VRAM (GB)": [
+                vram_calc["base_vram_gb"],
+                vram_calc["total_kv_cache_gb"],
+                vram_calc["cuda_overhead_gb"],
+                vram_calc["activation_overhead_gb"],
+                max(0.0, available_vram - vram_calc["total_estimated_vram_gb"])
+            ]
+        }
+        df_vram = pd.DataFrame(vram_breakdown_data)
+        
+        col_chart, col_explain = st.columns([2, 1])
+        with col_chart:
+            st.bar_chart(df_vram.set_index("Concepto"), y="VRAM (GB)", color="#0039AA")
+        
+        with col_explain:
+            st.markdown("**Fórmulas de Memoria KV Cache Dinámica:**")
+            st.latex(r"V_{\text{KV}} = 2 \times N_{\text{layers}} \times N_{\text{kv\_heads}} \times d_{\text{head}} \times L_{\text{context}} \times B_{\text{bytes}}")
+            st.markdown(f"""
+            *   **Capas ($N_{{\text{{layers}}}}$):** `{model_metadata['layers']}`
+            *   **KV Heads ($N_{{\text{{kv\_heads}}}}$):** `{model_metadata['num_kv_heads']}` (Atención `{model_metadata['attention_type']}`)
+            *   **Contexto ($L_{{\text{{context}}}}$):** `{st.session_state.context_length:,}` tokens
+            *   **Modelo de Referencia:** `{st.session_state.validated_model}`
+            """)
 
 with tab2:
     st.markdown("#### Teoría de Colas Erlang-C aplicada a Motores de Inferencia LLM")
-    
-    st.markdown("""
-    En los motores de servicio LLM modernos (como vLLM con *PagedAttention* o TensorRT-LLM), el número de servidores paralelos reales $m$ 
-    se define como la cantidad de solicitudes que el pool de KV Cache puede almacenar concurrentemente en VRAM física.
-    
-    Si el tráfico ofrecido $A = B_c \times \rho_{\text{user}}$ excede la capacidad de slots $m$, o se acerca al límite (tasa de uso $\ge 85\%$), 
-    los tiempos de respuesta (TTFT) se degradan exponencialmente debido a que las solicitudes entrantes deben ser puestas en cola 
-    (o realizar *swapping* de KV Cache a memoria CPU, lo cual destruye el rendimiento).
-    """)
-    
-    st.latex(r"P_C(m, A) = \frac{\frac{A^m}{m!} \frac{m}{m - A}}{\sum_{k=0}^{m-1} \frac{A^k}{k!} + \frac{A^m}{m!} \frac{m}{m - A}}")
-    
-    col_erl_1, col_erl_2 = st.columns(2)
-    with col_erl_1:
-        st.info(f"""
-        **Métricas de la Simulación Actual:**
-        *   **Usuarios Activos ($B_c$):** {st.session_state.concurrent_users}
-        *   **Tasa de Actividad:** {st.session_state.user_activity_rate * 100:.0f}%
-        *   **Intensidad de Tráfico Ofrecido ($A$):** {offered_traffic_a:.2f} Erlangs
-        *   **Capacidad de Canales ($m$):** {physical_servers_m} slots concurrentes
+    if vram_calc is None:
+        st.info("💡 Por favor, ejecute el pipeline de datos (Capa Plata) y seleccione/valide un modelo para iniciar la simulación de colas Erlang-C.")
+    else:
+        st.markdown("""
+        En los motores de servicio LLM modernos (como vLLM con *PagedAttention* o TensorRT-LLM), el número de servidores paralelos reales $m$ 
+        se define como la cantidad de solicitudes que el pool de KV Cache puede almacenar concurrentemente en VRAM física.
+        
+        Si el tráfico ofrecido $A = B_c \times \rho_{\text{user}}$ excede la capacidad de slots $m$, o se acerca al límite (tasa de uso $\ge 85\%$), 
+        los tiempos de respuesta (TTFT) se degradan exponencialmente debido a que las solicitudes entrantes deben ser puestas en cola 
+        (o realizar *swapping* de KV Cache a memoria CPU, lo cual destruye el rendimiento).
         """)
         
-    with col_erl_2:
-        util_steps = np.linspace(0.1, 0.99, 50)
-        delay_factor = 1.0 / (1.0 - util_steps)
+        st.latex(r"P_C(m, A) = \frac{\frac{A^m}{m!} \frac{m}{m - A}}{\sum_{k=0}^{m-1} \frac{A^k}{k!} + \frac{A^m}{m!} \frac{m}{m - A}}")
         
-        df_delay = pd.DataFrame({
-            "Tasa de Utilización (Rho)": util_steps * 100,
-            "Multiplicador de Latencia / Espera": delay_factor
-        }).set_index("Tasa de Utilización (Rho)")
-        
-        st.line_chart(df_delay, y="Multiplicador de Latencia / Espera", color="#03A9F4")
-        st.caption("Efecto de cuello de botella: La latencia crece asintóticamente al superar el 85% de utilización.")
+        col_erl_1, col_erl_2 = st.columns(2)
+        with col_erl_1:
+            st.info(f"""
+            **Métricas de la Simulación Actual:**
+            *   **Usuarios Activos ($B_c$):** {st.session_state.concurrent_users}
+            *   **Tasa de Actividad:** {st.session_state.user_activity_rate * 100:.0f}%
+            *   **Intensidad de Tráfico Ofrecido ($A$):** {offered_traffic_a:.2f} Erlangs
+            *   **Capacidad de Canales ($m$):** {physical_servers_m} slots concurrentes
+            """)
+            
+        with col_erl_2:
+            util_steps = np.linspace(0.1, 0.99, 50)
+            delay_factor = 1.0 / (1.0 - util_steps)
+            
+            df_delay = pd.DataFrame({
+                "Tasa de Utilización (Rho)": util_steps * 100,
+                "Multiplicador de Latencia / Espera": delay_factor
+            }).set_index("Tasa de Utilización (Rho)")
+            
+            st.line_chart(df_delay, y="Multiplicador de Latencia / Espera", color="#03A9F4")
+            st.caption("Efecto de cuello de botella: La latencia crece asintóticamente al superar el 85% de utilización.")
 
 with tab3:
     st.markdown("#### Estructura y Fuentes de Datos Externas (Esqueleto de Integración)")
-    st.markdown("""
-    Los datos técnicos y de calidad que alimentan este selector se ingestan diariamente de manera automatizada. 
-    Para optimizar el rendimiento, las llamadas externas se encuentran protegidas por un caché local persistente.
-    """)
-    
-    st.markdown("""
-    ```python
-    # Ejemplo de consumo e integración de APIs en Fase 2 (Comparación de Modelos)
-    
-    # 1. Hugging Face Hub: Extrae la topología de la red para el cálculo de KV Cache
-    from huggingface_hub import HfApi
-    api = HfApi()
-    model_info = api.model_info("meta-llama/Meta-Llama-3-70B-Instruct")
-    
-    # 2. Artificial Analysis / OpenRouter: Extrae la latencia (TTFT) y coste real
-    import requests
-    response = requests.get("https://api.artificialanalysis.ai/v1/models/llama-3-70b")
-    performance = response.json() # Contiene 'tokens_per_sec', 'cost_per_million'
-    
-    # 3. Open LLM Leaderboard (MMLU, IFEval, GPQA): Extrae capacidad de razonamiento legal
-    # IFEval mide adherencia a instrucciones de formato (vital para el formato de TDRs Legales)
-    quality_scores = load_leaderboard_score("meta-llama/Meta-Llama-3-70B-Instruct")
-    ```
-    """)
-    
-    st.subheader(f"Datos Obtenidos para `{st.session_state.validated_model}` (Caché Activo)")
-    
-    perf = fetch_physical_performance_metrics(st.session_state.validated_model)
-    qual = fetch_quality_and_benchmarks(st.session_state.validated_model)
-    
-    col_api_1, col_api_2, col_api_3 = st.columns(3)
-    with col_api_1:
-        st.write("**Arquitectura (HF Hub):**")
-        st.json(model_metadata)
-    with col_api_2:
-        st.write("**Rendimiento Físico (Artificial Analysis):**")
-        st.json(perf)
-    with col_api_3:
-        st.write("**Calidad y Benchmarks (EleutherAI / HF Leaderboard):**")
-        st.json(qual)
+    if vram_calc is None or st.session_state.validated_model is None:
+        st.info("💡 Por favor, ejecute el pipeline de datos (Capa Plata) y seleccione/valide un modelo para ver la integración de APIs y datos en tiempo real.")
+    else:
+        st.markdown("""
+        Los datos técnicos y de calidad que alimentan este selector se ingestan diariamente de manera automatizada. 
+        Para optimizar el rendimiento, las llamadas externas se encuentran protegidas por un caché local persistente.
+        """)
+        
+        st.markdown("""
+        ```python
+        # Ejemplo de consumo e integración de APIs en Fase 2 (Comparación de Modelos)
+        
+        # 1. Hugging Face Hub: Extrae la topología de la red para el cálculo de KV Cache
+        from huggingface_hub import HfApi
+        api = HfApi()
+        model_info = api.model_info("meta-llama/Meta-Llama-3-70B-Instruct")
+        
+        # 2. Artificial Analysis / OpenRouter: Extrae la latencia (TTFT) y coste real
+        import requests
+        response = requests.get("https://api.artificialanalysis.ai/v1/models/llama-3-70b")
+        performance = response.json() # Contiene 'tokens_per_sec', 'cost_per_million'
+        
+        # 3. Open LLM Leaderboard (MMLU, IFEval, GPQA): Extrae capacidad de razonamiento legal
+        # IFEval mide adherencia a instrucciones de formato (vital para el formato de TDRs Legales)
+        quality_scores = load_leaderboard_score("meta-llama/Meta-Llama-3-70B-Instruct")
+        ```
+        """)
+        
+        st.subheader(f"Datos Obtenidos para `{st.session_state.validated_model}` (Caché Activo)")
+        
+        perf = fetch_physical_performance_metrics(st.session_state.validated_model)
+        qual = fetch_quality_and_benchmarks(st.session_state.validated_model)
+        
+        col_api_1, col_api_2, col_api_3 = st.columns(3)
+        with col_api_1:
+            st.write("**Arquitectura (HF Hub):**")
+            st.json(model_metadata)
+        with col_api_2:
+            st.write("**Rendimiento Físico (Artificial Analysis):**")
+            st.json(perf)
+        with col_api_3:
+            st.write("**Calidad y Benchmarks (EleutherAI / HF Leaderboard):**")
+            st.json(qual)
 
 with tab4:
     st.markdown("#### 🛠️ Pipeline de Datos Medallion (Ingesta & Observabilidad)")
