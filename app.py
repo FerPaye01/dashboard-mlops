@@ -34,7 +34,7 @@ st.markdown("""
     @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700;800;900&display=swap');
     
     /* Configuración de tipografía oficial Poppins y color de texto base */
-    html, body, [class*="css"], [class*="st-"] {
+    html, body, .stApp {
         font-family: 'Poppins', sans-serif !important;
         color: #0B0F19 !important;
         font-size: 0.85rem !important;
@@ -243,6 +243,22 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
+# --- Helper GPU Recommendation ---
+def suggest_hardware(vram_gb):
+    if vram_gb <= 0:
+        return "N/A (Cloud)"
+    elif vram_gb <= 16.0:
+        return "RTX 3060/4060 Ti / T4 / AWS ml.g4dn.2xlarge"
+    elif vram_gb <= 24.0:
+        return "RTX 3090/4090 / L4 / AWS ml.g5.2xlarge"
+    elif vram_gb <= 48.0:
+        return "RTX A6000 / 2x RTX 4090 / AWS ml.g5.4xlarge"
+    elif vram_gb <= 80.0:
+        return "NVIDIA A100 / H100 (80GB) / AWS ml.p4de"
+    else:
+        gpus = int(math.ceil(vram_gb / 80.0))
+        return f"{gpus}x A100 / AWS ml.p4d"
+
 # --- 1. Gestión de Estado (st.session_state) ---
 # Cargar especificaciones físicas de las GPUs desde un archivo local si existe
 def load_gpu_specs() -> dict:
@@ -280,6 +296,8 @@ if 'validated_model_name' not in st.session_state:
     st.session_state.validated_model_name = None
 if 'user_activity_rate' not in st.session_state:
     st.session_state.user_activity_rate = 0.40  # Porcentaje de tiempo que un usuario activo está pidiendo tokens
+if 'local_quantization' not in st.session_state:
+    st.session_state.local_quantization = "FP16 / BF16 (Nativo - 16 bits)"
 
 # Inicialización de las variables de la Fase 2 en st.session_state
 if 'weight_quality' not in st.session_state:
@@ -334,6 +352,8 @@ if 'temp_deployment_type' not in st.session_state:
     st.session_state.temp_deployment_type = st.session_state.deployment_type
 if 'temp_rows_per_page' not in st.session_state:
     st.session_state.temp_rows_per_page = st.session_state.rows_per_page
+if 'temp_local_quantization' not in st.session_state:
+    st.session_state.temp_local_quantization = st.session_state.local_quantization
 
 # Inicialización de las variables de Configuración Avanzada en st.session_state
 if 'gpus_tp' not in st.session_state:
@@ -346,6 +366,10 @@ if 'continuous_batching' not in st.session_state:
     st.session_state.continuous_batching = True
 if 'chunked_prefill' not in st.session_state:
     st.session_state.chunked_prefill = False
+if 'cache_hit_rate' not in st.session_state:
+    st.session_state.cache_hit_rate = 0
+if 'session_turns' not in st.session_state:
+    st.session_state.session_turns = 5
 
 # Sincronización inicial para los widgets temp de Configuración Avanzada
 if 'temp_gpus_tp' not in st.session_state:
@@ -358,6 +382,10 @@ if 'temp_continuous_batching' not in st.session_state:
     st.session_state.temp_continuous_batching = st.session_state.continuous_batching
 if 'temp_chunked_prefill' not in st.session_state:
     st.session_state.temp_chunked_prefill = st.session_state.chunked_prefill
+if 'temp_cache_hit_rate' not in st.session_state:
+    st.session_state.temp_cache_hit_rate = st.session_state.cache_hit_rate
+if 'temp_session_turns' not in st.session_state:
+    st.session_state.temp_session_turns = st.session_state.session_turns
 
 
 # Callbacks para actualización en tiempo real e instantánea (UI Reactiva)
@@ -406,6 +434,15 @@ def update_continuous_batching():
 
 def update_chunked_prefill():
     st.session_state.chunked_prefill = st.session_state.temp_chunked_prefill
+
+def update_cache_hit_rate():
+    st.session_state.cache_hit_rate = st.session_state.temp_cache_hit_rate
+
+def update_session_turns():
+    st.session_state.session_turns = st.session_state.temp_session_turns
+
+def update_local_quantization():
+    st.session_state.local_quantization = st.session_state.temp_local_quantization
 
 def update_weight_quality():
     w_dict = {
@@ -496,9 +533,17 @@ if st.session_state.validated_model is not None:
     model_num_kv_heads = int(model_metadata.get("num_kv_heads", 8))
     model_attention_type = model_metadata.get("attention_type", "GQA")
     
+    local_quant = st.session_state.local_quantization
+    if "FP16" in local_quant:
+        model_precision_bits = 16
+    elif "INT8" in local_quant:
+        model_precision_bits = 8
+    else:
+        model_precision_bits = 4
+
     vram_calc = estimate_vram_requirements(
         model_params_b=model_params_b,
-        precision_bits=16,
+        precision_bits=model_precision_bits,
         context_length=st.session_state.context_length,
         attention_type=model_attention_type,
         num_users=st.session_state.concurrent_users,
@@ -593,6 +638,15 @@ with st.sidebar:
         </div>
         """, unsafe_allow_html=True)
     
+    # Selector de Cuantización de Referencia
+    st.selectbox(
+        "🎚️ Cuantización de Referencia (Local)",
+        options=["FP16 / BF16 (Nativo - 16 bits)", "INT8 (8 bits)", "INT4 (Q4_K_M - 4 bits)"],
+        key="temp_local_quantization",
+        on_change=update_local_quantization,
+        help="Ajusta la precisión de los pesos de los modelos locales para recalcular toda la VRAM del catálogo de forma masiva."
+    )
+    
     # Elemento 2: Slider de Longitud de Contexto
     st.slider(
         "Longitud de Contexto de RAG (Tokens)",
@@ -631,34 +685,43 @@ with st.sidebar:
     
     if st.session_state.validated_model is not None and erlang_results is not None:
         st.caption(f"Modelo: {st.session_state.validated_model_name}")
-        saturacion_porcentaje = erlang_results["utilization_rate"] * 100
         
-        col_stat_1, col_stat_2 = st.columns(2)
-        with col_stat_1:
-            st.metric(
-                label="Saturación Cola",
-                value=f"{saturacion_porcentaje:.1f}%",
-                delta=f"Capacidad: {physical_servers_m} slots",
-                delta_color="off"
-            )
-        with col_stat_2:
-            st.metric(
-                label="Prob. Espera",
-                value=f"{erlang_results['waiting_probability'] * 100:.1f}%"
-            )
-            
-        if erlang_results["status"] == "Alerta: Latencia Hiperbólica / Riesgo de Cola":
-            st.error("🚨 **Alerta: Saturación**")
+        is_cloud = "Cloud" in st.session_state.validated_model_name if st.session_state.validated_model_name else False
+        if is_cloud:
+            st.info("☁️ **Inferencia en la Nube**")
             st.markdown(
-                "<div class='status-badge-red'>CRÍTICO: Tráfico excede la capacidad física de VRAM.</div>", 
+                "<div class='status-badge-green'>OPERA SIN VRAM LOCAL: La inferencia es administrada externamente por el proveedor y no consume memoria ni recursos locales.</div>", 
                 unsafe_allow_html=True
             )
         else:
-            st.success("🟢 **Operación Fluida**")
-            st.markdown(
-                "<div class='status-badge-green'>SISTEMA ESTABLE: Latencia controlada en cola.</div>", 
-                unsafe_allow_html=True
-            )
+            saturacion_porcentaje = erlang_results["utilization_rate"] * 100
+            
+            col_stat_1, col_stat_2 = st.columns(2)
+            with col_stat_1:
+                st.metric(
+                    label="Saturación Cola",
+                    value=f"{saturacion_porcentaje:.1f}%",
+                    delta=f"Capacidad: {physical_servers_m} slots",
+                    delta_color="off"
+                )
+            with col_stat_2:
+                st.metric(
+                    label="Prob. Espera",
+                    value=f"{erlang_results['waiting_probability'] * 100:.1f}%"
+                )
+                
+            if erlang_results["status"] == "Alerta: Latencia Hiperbólica / Riesgo de Cola":
+                st.error("🚨 **Alerta: Saturación**")
+                st.markdown(
+                    "<div class='status-badge-red'>CRÍTICO: Tráfico excede la capacidad física de VRAM.</div>", 
+                    unsafe_allow_html=True
+                )
+            else:
+                st.success("🟢 **Operación Fluida**")
+                st.markdown(
+                    "<div class='status-badge-green'>SISTEMA ESTABLE: Latencia controlada en cola.</div>", 
+                    unsafe_allow_html=True
+                )
     else:
         st.info("💡 Por favor, cargue el catálogo y valide un modelo para iniciar la simulación de cola.")
         
@@ -701,126 +764,7 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-# --- 3.1 Fase 2: Preferencias de Negocio y Despliegue ---
-with st.expander("⚙️ Preferencias de Negocio y Despliegue", expanded=True):
-    col_b1, col_b2, col_b3, col_b4 = st.columns([1.5, 1, 1, 1])
-    
-    with col_b1:
-        st.selectbox(
-            "💻 Entorno de Despliegue",
-            options=["Solo Local (Privado / GGUF)", "Solo Cloud (APIs / OpenRouter)", "Ambos (Híbrido)"],
-            key="temp_deployment_type",
-            on_change=update_deployment_type,
-            help="Local garantiza privacidad total de los datos usando hardware propio. Cloud ofrece mayor velocidad pero requiere pago por token a proveedores externos."
-        )
-        
-        # Explicar la lógica de filtrado según la opción (Preparación para Fase 3)
-        if st.session_state.deployment_type == "Solo Local (Privado / GGUF)":
-            st.info("🔒 **Filtro Local Activo:** Solo se evaluarán modelos descargables (.safetensors / GGUF) compatibles con vLLM o llama.cpp y con límite físico de VRAM de la Fase 1.")
-        elif st.session_state.deployment_type == "Solo Cloud (APIs / OpenRouter)":
-            st.warning("🌐 **Filtro Cloud Activo:** Se ignorará la VRAM del servidor local. La inferencia se evaluará a través de proveedores MaaS (Artificial Analysis / OpenRouter) mediante coste por token.")
-        else:
-            st.success("⚖️ **Modo Híbrido Activo:** Se compararán todas las alternativas (Local y Cloud) balanceando privacidad, velocidad y coste.")
-            
-    with col_b2:
-        st.slider(
-            "🧠 Peso de Calidad Técnica (IFEval, MMLU)",
-            min_value=0,
-            max_value=100,
-            key="temp_weight_quality",
-            on_change=update_weight_quality,
-            help="IFEval mide el cumplimiento estricto de formato de instrucciones (vital para el formato de TDRs Legales)."
-        )
-        
-    with col_b3:
-        st.slider(
-            "⚡ Peso de Velocidad (Tokens/s)",
-            min_value=0,
-            max_value=100,
-            key="temp_weight_speed",
-            on_change=update_weight_speed,
-            help="Ponderación dada a la latencia inicial (TTFT) y a la velocidad de respuesta."
-        )
-        
-    with col_b4:
-        # Nota dinámica e identificación dinámica de etiquetas
-        if st.session_state.deployment_type == "Solo Local (Privado / GGUF)":
-            efficiency_label = "💾 Eficiencia de VRAM"
-            efficiency_help = "Ponderación dada a la optimización de uso de VRAM y cuantización (GGUF/AWQ/GPTQ) para hosting local."
-        elif st.session_state.deployment_type == "Solo Cloud (APIs / OpenRouter)":
-            efficiency_label = "🪙 Menor Coste por Token"
-            efficiency_help = "Ponderación dada a minimizar la facturación mensual por millón de tokens en APIs."
-        else:
-            efficiency_label = "💰 Eficiencia de VRAM / Coste"
-            efficiency_help = "Ponderación equilibrada para VRAM local y tarifas de APIs cloud."
-            
-        st.slider(
-            efficiency_label,
-            min_value=0,
-            max_value=100,
-            key="temp_weight_efficiency",
-            on_change=update_weight_efficiency,
-            help=efficiency_help
-        )
-        
-    # Mostrar la barra de porcentaje de ponderación normalizada (100% total) de forma compacta
-    st.markdown(f"""
-    <div style="background-color: #F2F2F2; padding: 6px 12px; border-radius: 6px; display: flex; justify-content: space-around; align-items: center; border: 1px solid #E5E7EB; margin-top: 8px;">
-        <span style="font-size: 0.8rem; color: #0B0F19;">🧠 Calidad Técnica: <strong style="color: #0039AA;">{st.session_state.weight_quality}%</strong></span>
-        <span style="font-size: 0.8rem; color: #0B0F19; border-left: 1px solid #D1D5DB; padding-left: 15px;">⚡ Velocidad: <strong style="color: #35CC29;">{st.session_state.weight_speed}%</strong></span>
-        <span style="font-size: 0.8rem; color: #0B0F19; border-left: 1px solid #D1D5DB; padding-left: 15px;">💼 {efficiency_label.split(' ', 1)[-1]}: <strong style="color: #F6A229;">{st.session_state.weight_efficiency}%</strong></span>
-    </div>
-    """, unsafe_allow_html=True)
-
-
-# --- 3.1.2 Configuración Avanzada del Motor de Inferencia ---
-with st.expander("⚙️ Configuración Avanzada del Motor de Inferencia", expanded=False):
-    col_adv1, col_adv2, col_adv3 = st.columns(3)
-    
-    with col_adv1:
-        st.markdown("### Escalabilidad Física")
-        st.number_input(
-            "Número de GPUs (Tensor Parallelism - TP)",
-            min_value=1,
-            step=1,
-            key="temp_gpus_tp",
-            on_change=update_gpus_tp,
-            help="Divide las matrices del modelo entre varias tarjetas gráficas interconectadas para aumentar la VRAM total y reducir latencia."
-        )
-        
-    with col_adv2:
-        st.markdown("### Límites de Memoria del Motor")
-        st.slider(
-            "Utilización de VRAM (gpu_memory_utilization)",
-            min_value=0.70,
-            max_value=0.99,
-            step=0.01,
-            key="temp_gpu_memory_utilization",
-            on_change=update_gpu_memory_utilization,
-            help="Porcentaje de la VRAM reservado para los pesos y la Caché KV. Superar el 0.95 aumenta el riesgo de error Out Of Memory (OOM) por picos de activaciones."
-        )
-        st.selectbox(
-            "Motor de Inferencia y Atención",
-            options=["vLLM (PagedAttention)", "SGLang (RadixAttention)"],
-            key="temp_inference_engine",
-            on_change=update_inference_engine,
-            help="PagedAttention divide el KV Cache en bloques lógicos. RadixAttention permite compartir prefijos en un árbol de búsqueda para reutilizar contextos comunes."
-        )
-        
-    with col_adv3:
-        st.markdown("### Técnicas de Planificación y Espera")
-        st.toggle(
-            "Loteamiento Continuo (Continuous Batching)",
-            key="temp_continuous_batching",
-            on_change=update_continuous_batching,
-            help="Inyecta nuevas peticiones en el instante exacto en que otra termina, maximizando la ocupación del procesador."
-        )
-        st.toggle(
-            "Prellenado Fraccionado (Chunked Prefill)",
-            key="temp_chunked_prefill",
-            on_change=update_chunked_prefill,
-            help="Fragmenta la lectura de documentos gigantes para no congelar a los usuarios que ya están en la cola de generación."
-        )
+# --- Controles de Preferencias y Configuración Avanzada movidos a la pestaña de Filtros y Configuración ---
 
 
 
@@ -834,8 +778,15 @@ st.markdown("""
 if st.session_state.catalog_df is None or st.session_state.catalog_df.empty:
     st.info("💡 **Catálogo Vacío:** Por favor presione el botón **'🔄 Actualizar Catálogo (Carga Completa)'** en la barra lateral izquierda para descargar dinámicamente los modelos en tiempo real.")
 else:
-    processed_models = []
+    # 1. Filtrar dinámicamente según el Entorno de Despliegue seleccionado
     df_raw = st.session_state.catalog_df.copy()
+    dep_choice = st.session_state.deployment_type
+    if dep_choice == "Solo Local (Privado / GGUF)":
+        df_raw = df_raw[df_raw["hosting"] == "Solo Local (Privado / GGUF)"]
+    elif dep_choice == "Solo Cloud (APIs / OpenRouter)":
+        df_raw = df_raw[df_raw["hosting"] == "Solo Cloud (APIs / OpenRouter)"]
+
+    processed_models = []
     
     # Sobrescribir dinámicamente con los benchmarks oficiales verificados en caliente
     # para evitar problemas de caché, CSV o session state desactualizados.
@@ -860,7 +811,13 @@ else:
         hosting = row["hosting"]
         
         # 1. Calcular VRAM Peak para modelos locales
-        precision_bytes = 2.0 # FP16
+        local_quant = st.session_state.local_quantization
+        if "FP16" in local_quant:
+            precision_bytes = 2.0
+        elif "INT8" in local_quant:
+            precision_bytes = 1.0
+        else: # INT4
+            precision_bytes = 0.56
         
         if attention_type == 'MLA':
             kv_bytes_per_token = (512 + 128) * layers * precision_bytes
@@ -885,6 +842,27 @@ else:
             
         vram_peak = (pesos_estaticos + activaciones + kv_term) * 1.20
         
+        # Si el modelo se hospeda en la nube, no consume VRAM local
+        is_cloud_model = (hosting == "Solo Cloud (APIs / OpenRouter)" or hosting == "Solo Cloud (APIs / OpenRouter) [Fallback]")
+        if is_cloud_model:
+            vram_peak = 0.0
+
+        # Calcular Costo de Entrada Efectivo considerando Prompt Caching (Fórmula Amortizada del informe MLOps)
+        cost_input = max(0.0, float(row.get("cost_input_per_m", 0.0)))
+        cost_output = max(0.0, float(row.get("cost_output_per_m", 0.0)))
+        
+        cost_cache_read = float(row.get("cost_cache_read_per_m", cost_input))
+        cost_cache_write = float(row.get("cost_cache_write_per_m", cost_input))
+        
+        if pd.isna(cost_cache_read) or cost_cache_read < 0:
+            cost_cache_read = cost_input
+        if pd.isna(cost_cache_write) or cost_cache_write < 0:
+            cost_cache_write = cost_input
+            
+        H_cache = st.session_state.cache_hit_rate / 100.0
+        N_cache = st.session_state.session_turns
+        effective_cost_input = (cost_cache_write + (N_cache - 1) * (H_cache * cost_cache_read + (1.0 - H_cache) * cost_cache_write)) / N_cache
+
         # 2. Evaluación de Compatibilidad (Sin Eliminación)
         is_compatible = True
         reason = "Compatible"
@@ -975,18 +953,18 @@ else:
         # Eficiencia
         if dep_choice == "Solo Local (Privado / GGUF)":
             vram_pct = (vram_peak / available_vram)
-            efficiency_score = max(0.0, (1.0 - vram_pct) * 100.0)
+            efficiency_score = min(100.0, max(0.0, (1.0 - vram_pct) * 100.0))
         elif dep_choice == "Solo Cloud (APIs / OpenRouter)":
-            cost_m = row["cost_input_per_m"] + row["cost_output_per_m"]
+            cost_m = effective_cost_input + cost_output
             max_cost_m = 0.59 + 0.79
-            efficiency_score = max(0.0, (1.0 - (cost_m / max_cost_m)) * 100.0)
+            efficiency_score = min(100.0, max(0.0, (1.0 - (cost_m / max_cost_m)) * 100.0))
         else:
             # Híbrido
             vram_pct = (vram_peak / available_vram) if vram_peak > 0 else 0.0
-            eff_vram = max(0.0, (1.0 - vram_pct) * 100.0)
-            cost_m = row["cost_input_per_m"] + row["cost_output_per_m"]
+            eff_vram = min(100.0, max(0.0, (1.0 - vram_pct) * 100.0))
+            cost_m = effective_cost_input + cost_output
             max_cost_m = 0.59 + 0.79
-            eff_cost = max(0.0, (1.0 - (cost_m / max_cost_m)) * 100.0)
+            eff_cost = min(100.0, max(0.0, (1.0 - (cost_m / max_cost_m)) * 100.0))
             efficiency_score = (eff_vram + eff_cost) / 2.0
             
         # 4. Calcular Score Final Ponderado
@@ -1020,8 +998,14 @@ else:
             "VRAM Peak Est.": f"⚠️ {vram_peak:.1f} GB" if ("VRAM Excedida" in reason) else (f"{vram_peak:.1f} GB" if vram_peak > 0 else "N/A (Cloud)"),
             "Velocidad (Tok/s)": f"{speed_val:.1f}",
             "Latencia TTFT": f"{ttft_val:.0f} ms",
-            "Coste Est. ($/M)": f"${(row['cost_input_per_m'] + row['cost_output_per_m'])/2:.3f}" if row["cost_input_per_m"] > 0 else "Gratis",
+            "Coste Est. ($/M)": f"${(effective_cost_input + cost_output)/2:.3f}" if (effective_cost_input + cost_output) > 0 else "Gratis",
             "Puntaje Final": round(total_score, 1),
+            "_vram_base_gb": 0.0 if is_cloud_model else (pesos_estaticos + activaciones),
+            "_kv_cache_user_gb": 0.0 if is_cloud_model else kv_cache_per_user_gb,
+            "_kv_cache_total_gb": 0.0 if is_cloud_model else kv_term,
+            "_vram_peak_gb": 0.0 if is_cloud_model else vram_peak,
+            "_hw_sugerido": "N/A (Cloud)" if is_cloud_model else suggest_hardware(vram_peak),
+            "_params_b": params_b,
             "_score_raw": total_score,
             "_speed_raw": speed_val,
             "_quality_raw": quality_score,
@@ -1055,166 +1039,352 @@ else:
                 st.session_state.validated_model_name = top_model_name
                 st.rerun()
         
-        # Controles superiores: Buscador y selector de número de filas por página
-        col_search, col_rpp = st.columns([3, 1])
-        with col_search:
-            search_query = st.text_input("🔍 Buscar modelo:", "")
-        with col_rpp:
-            st.selectbox(
-                "Filas:",
-                options=[10, 20, 50, "Todos"],
-                key="temp_rows_per_page",
-                on_change=update_rows_per_page
+        # Definir las pestañas de la sección de clasificación
+        tab_tabla, tab_infraestructura, tab_filtros = st.tabs(["🏆 Clasificación de Modelos", "📊 Tablero de Infraestructura / Feature Engineering", "🎛️ Filtros y Configuración"])
+        
+        with tab_tabla:
+            # Controles superiores: Buscador y selector de número de filas por página
+            col_search, col_rpp = st.columns([3, 1])
+            with col_search:
+                search_query = st.text_input("🔍 Buscar modelo:", "")
+            with col_rpp:
+                st.selectbox(
+                    "Filas:",
+                    options=[10, 20, 50, "Todos"],
+                    key="temp_rows_per_page",
+                    on_change=update_rows_per_page
+                )
+                
+            # Aplicar filtro de búsqueda
+            if search_query:
+                df_filtered = df_catalog[
+                    df_catalog["Modelo"].str.contains(search_query, case=False) |
+                    df_catalog["Alojamiento"].str.contains(search_query, case=False) |
+                    df_catalog["Atención"].str.contains(search_query, case=False)
+                ]
+            else:
+                df_filtered = df_catalog
+                
+            # Banner Premium de recomendación para Osinergmin (Compacto)
+            st.markdown(f"""
+            <div style="background-color: rgba(53, 204, 41, 0.08); border-left: 4px solid #35CC29; padding: 6px 12px; border-radius: 6px; margin-bottom: 8px;">
+                <span style="font-size: 0.82rem; color: #0B0F19;">🏆 <strong>Modelo Recomendado para Osinergmin:</strong> <span style="color: #0039AA; font-weight: 700;">{top_model_name}</span> con una puntuación ponderada del <strong>{df_catalog.iloc[0]['Puntaje Final']:.1f}%</strong>.</span>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            # Lógica de Slicing y Paginación
+            total_rows = len(df_filtered)
+            rows_choice = st.session_state.rows_per_page
+            
+            if rows_choice == "Todos":
+                df_page = df_filtered
+                total_pages = 1
+                st.session_state.current_page = 0
+            else:
+                rpp = int(rows_choice)
+                total_pages = max(1, math.ceil(total_rows / rpp))
+                
+                # Limitar índice de página
+                if st.session_state.current_page >= total_pages:
+                    st.session_state.current_page = total_pages - 1
+                if st.session_state.current_page < 0:
+                    st.session_state.current_page = 0
+                    
+                start_row = st.session_state.current_page * rpp
+                end_row = start_row + rpp
+                df_page = df_filtered.iloc[start_row:end_row]
+                
+            # Renderizado de la tabla con st.dataframe (excluyendo columnas internas auxiliares y redundantes)
+            cols_to_drop = [c for c in df_page.columns if c.startswith("_")] + ["Alojamiento", "Atención"]
+            df_display = df_page.drop(columns=cols_to_drop)
+            styled_df = df_display.style.map(
+                lambda x: "color: #EF4444; font-weight: bold;" if (isinstance(x, str) and "⚠️" in x) else ""
             )
             
-        # Aplicar filtro de búsqueda
-        if search_query:
-            df_filtered = df_catalog[
-                df_catalog["Modelo"].str.contains(search_query, case=False) |
-                df_catalog["Alojamiento"].str.contains(search_query, case=False) |
-                df_catalog["Atención"].str.contains(search_query, case=False)
-            ]
-        else:
-            df_filtered = df_catalog
+            st.dataframe(
+                styled_df,
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "Puntaje Final": st.column_config.ProgressColumn(
+                        "Puntaje Final",
+                        help="Puntaje calculado en base a las ponderaciones de negocio.",
+                        format="%.1f",
+                        min_value=0.0,
+                        max_value=100.0,
+                    )
+                }
+            )
             
-        # Banner Premium de recomendación para Osinergmin (Compacto)
-        st.markdown(f"""
-        <div style="background-color: rgba(53, 204, 41, 0.08); border-left: 4px solid #35CC29; padding: 6px 12px; border-radius: 6px; margin-bottom: 8px;">
-            <span style="font-size: 0.82rem; color: #0B0F19;">🏆 <strong>Modelo Recomendado para Osinergmin:</strong> <span style="color: #0039AA; font-weight: 700;">{top_model_name}</span> con una puntuación ponderada del <strong>{df_catalog.iloc[0]['Puntaje Final']:.1f}%</strong>.</span>
-        </div>
-        """, unsafe_allow_html=True)
-        
-        # Lógica de Slicing y Paginación
-        total_rows = len(df_filtered)
-        rows_choice = st.session_state.rows_per_page
-        
-        if rows_choice == "Todos":
-            df_page = df_filtered
-            total_pages = 1
-            st.session_state.current_page = 0
-        else:
-            rpp = int(rows_choice)
-            total_pages = max(1, math.ceil(total_rows / rpp))
+            # Controles inferiores de paginación (Anterior / Siguiente)
+            if rows_choice != "Todos" and total_pages > 1:
+                col_pag1, col_pag2, col_pag3 = st.columns([1, 2, 1])
+                with col_pag2:
+                    st.markdown(f"<div style='text-align: center; color: #6B7280;'>Página **{st.session_state.current_page + 1}** de **{total_pages}** (Mostrando modelos {start_row + 1} a {min(end_row, total_rows)} de {total_rows})</div>", unsafe_allow_html=True)
+                with col_pag1:
+                    if st.button("⬅️ Anterior", disabled=(st.session_state.current_page == 0), use_container_width=True):
+                        st.session_state.current_page -= 1
+                        st.rerun()
+                with col_pag3:
+                    if st.button("Siguiente ➡️", disabled=(st.session_state.current_page == total_pages - 1), use_container_width=True):
+                        st.session_state.current_page += 1
+                        st.rerun()
+
+            # --- 3.3 Sección de Validación y Simulación de Infraestructura ---
+            st.markdown("""
+            <div style="margin-top: 8px; margin-bottom: 4px;">
+                <h3 style="margin: 0; font-size: 1.1rem; color: #0039AA; font-weight: 700;">🎯 Validación y Simulación de Infraestructura</h3>
+            </div>
+            """, unsafe_allow_html=True)
             
-            # Limitar índice de página
-            if st.session_state.current_page >= total_pages:
-                st.session_state.current_page = total_pages - 1
-            if st.session_state.current_page < 0:
-                st.session_state.current_page = 0
+            # Obtener los modelos ordenados de df_catalog
+            model_options = df_catalog["Modelo"].tolist()
+            
+            # Encontrar el índice del modelo validado actual
+            clean_options = [m.replace("⭐ ", "").replace(" (Recomendado)", "") for m in model_options]
+            default_idx = 0
+            if st.session_state.validated_model_name in clean_options:
+                default_idx = clean_options.index(st.session_state.validated_model_name)
                 
-            start_row = st.session_state.current_page * rpp
-            end_row = start_row + rpp
-            df_page = df_filtered.iloc[start_row:end_row]
+            selected_display_name = st.selectbox(
+                "🤖 Modelo a Validar y Simular:",
+                options=model_options,
+                index=default_idx,
+                help="Selecciona un modelo del catálogo. Se recalcularán las métricas de saturación y VRAM en tiempo real."
+            )
             
-        # Renderizado de la tabla con st.dataframe (excluyendo columnas internas auxiliares)
-        cols_to_drop = [c for c in df_page.columns if c.startswith("_")]
-        df_display = df_page.drop(columns=cols_to_drop)
-        styled_df = df_display.style.map(
-            lambda x: "color: #EF4444; font-weight: bold;" if (isinstance(x, str) and "⚠️" in x) else ""
-        )
-        
-        st.dataframe(
-            styled_df,
-            use_container_width=True,
-            hide_index=True,
-            column_config={
-                "Puntaje Final": st.column_config.ProgressColumn(
-                    "Puntaje Final",
-                    help="Puntaje calculado en base a las ponderaciones de negocio.",
-                    format="%.1f",
-                    min_value=0.0,
-                    max_value=100.0,
+            # Si el modelo seleccionado cambió, actualizar el estado y hacer rerun
+            clean_selected_name = selected_display_name.replace("⭐ ", "").replace(" (Recomendado)", "")
+            if clean_selected_name != st.session_state.validated_model_name:
+                selected_row = df_raw[df_raw["name"] == clean_selected_name]
+                if not selected_row.empty:
+                    st.session_state.validated_model = selected_row.iloc[0]["model_id"]
+                    st.session_state.validated_model_name = clean_selected_name
+                    st.rerun()
+
+            # Renderizar las KPI Cards para el modelo validado
+            if vram_calc is not None:
+                st.markdown(f"### 📊 Métricas de Despliegue para `{st.session_state.validated_model_name}`")
+                
+                is_cloud = "Cloud" in st.session_state.validated_model_name if st.session_state.validated_model_name else False
+                if is_cloud:
+                    st.success("☁️ **Modelo de Inferencia Administrada (Cloud):** Este modelo se ejecuta en la nube del proveedor mediante APIs. No consume memoria RAM de video (VRAM) de tu servidor ni depende de tu hardware local para su escalado.")
+                else:
+                    col_kpi1, col_kpi2, col_kpi3, col_kpi4 = st.columns(4)
+                    
+                    vram_total = st.session_state.server_vram * st.session_state.gpus_tp
+                    with col_kpi1:
+                        st.markdown(f"""
+                        <div class="glass-card">
+                            <div class="metric-label">VRAM Total Disponible</div>
+                            <div class="metric-value">{vram_total * st.session_state.gpu_memory_utilization:.1f} GB</div>
+                            <span style="color: #64748B; font-size: 0.8rem;">Física: {vram_total:.1f} GB (TP: {st.session_state.gpus_tp} GPUs)</span>
+                        </div>
+                        """, unsafe_allow_html=True)
+                    
+                    with col_kpi2:
+                        st.markdown(f"""
+                        <div class="glass-card">
+                            <div class="metric-label">VRAM Modelo Base</div>
+                            <div class="metric-value">{vram_calc['base_vram_gb']} GB</div>
+                            <span style="color: #64748B; font-size: 0.8rem;">Pesos del modelo en FP16</span>
+                        </div>
+                        """, unsafe_allow_html=True)
+                    
+                    with col_kpi3:
+                        st.markdown(f"""
+                        <div class="glass-card">
+                            <div class="metric-label">KV Cache / Usuario</div>
+                            <div class="metric-value">{vram_calc['kv_cache_per_user_gb'] * 1024:.2f} MB</div>
+                            <span style="color: #64748B; font-size: 0.8rem;">Para contexto de {st.session_state.context_length:,} tokens</span>
+                        </div>
+                        """, unsafe_allow_html=True)
+                    
+                    with col_kpi4:
+                        st.markdown(f"""
+                        <div class="glass-card">
+                            <div class="metric-label">Slots Físicos (m)</div>
+                            <div class="metric-value">{physical_servers_m}</div>
+                            <span style="color: #64748B; font-size: 0.8rem;">Hilos de ejecución en paralelo</span>
+                        </div>
+                        """, unsafe_allow_html=True)
+
+                # Detalle didáctico del tipo de atención
+                selected_row = df_raw[df_raw["name"] == st.session_state.validated_model_name]
+                if not selected_row.empty:
+                    att_mechanism = selected_row.iloc[0].get("attention_type", "GQA")
+                    att_desc = ""
+                    if att_mechanism == "MLA":
+                        att_desc = "**MLA (Multi-Head Latent Attention)**, una arquitectura avanzada (como la de DeepSeek) que comprime drásticamente la caché de claves/valores (KV Cache). Esto reduce el consumo de VRAM por usuario hasta en un 90%, permitiendo una concurrencia mucho mayor sin agotar la memoria del servidor."
+                    elif att_mechanism == "GQA":
+                        att_desc = "**GQA (Grouped-Query Attention)**, la arquitectura estándar en modelos modernos (como Llama 3 o Mistral). Comparte cabezales de claves y valores entre varios cabezales de consulta, reduciendo el consumo de VRAM unas 8 veces en comparación con MHA clásico, manteniendo un excelente rendimiento de velocidad."
+                    else:
+                        att_desc = "**MHA (Multi-Head Attention)**, la arquitectura de atención tradicional. Aunque es precisa, no optimiza la memoria de claves/valores, lo que significa que el consumo de VRAM por usuario crece de forma lineal y rápida con el contexto de la conversación, limitando la cantidad de usuarios concurrentes."
+                    
+                    st.markdown(f"""
+                    <div style="background-color: rgba(0, 57, 170, 0.04); border-left: 4px solid #0039AA; padding: 10px 14px; border-radius: 6px; margin-top: 10px; font-size: 0.8rem; line-height: 1.45;">
+                        💡 <strong>Mecanismo de Atención del Modelo:</strong> El modelo seleccionado utiliza {att_desc}
+                    </div>
+                    """, unsafe_allow_html=True)
+
+        with tab_infraestructura:
+            st.markdown("#### 📊 Tablero de Infraestructura / Feature Engineering")
+            st.markdown("""
+            Este tablero presenta las métricas físicas de inferencia calculadas para **todos los modelos** del catálogo, estimadas de forma dinámica en tiempo real según el contexto y usuarios concurrentes configurados en la barra lateral.
+            """)
+            
+            # Formatear el DataFrame con las columnas de Feature Engineering calculadas en el bucle
+            df_infra = pd.DataFrame()
+            df_infra["Modelo"] = df_catalog["Modelo"]
+            df_infra["Atención"] = df_catalog["Atención"]
+            df_infra["Parámetros (B)"] = df_catalog["_params_b"].map(lambda x: f"{x:.2f}B" if x > 0 else "N/A")
+            df_infra["VRAM Base (Estática + Activaciones)"] = df_catalog["_vram_base_gb"].map(lambda x: f"{x:.2f} GB" if x > 0 else "N/A (Cloud)")
+            df_infra["KV/Usuario (GB)"] = df_catalog["_kv_cache_user_gb"].map(lambda x: f"{x:.3f} GB" if x > 0 else "N/A (Cloud)")
+            df_infra["KV Cache Total (GB)"] = df_catalog["_kv_cache_total_gb"].map(lambda x: f"{x:.2f} GB" if x > 0 else "N/A (Cloud)")
+            df_infra["VRAM Peak Recomendada (GB)"] = df_catalog["_vram_peak_gb"].map(lambda x: f"{x:.2f} GB" if x > 0 else "N/A (Cloud)")
+            df_infra["Hardware Recomendado"] = df_catalog["_hw_sugerido"]
+            df_infra["Compatibilidad"] = df_catalog["Compatibilidad"]
+            
+            styled_infra = df_infra.style.map(
+                lambda x: "color: #EF4444; font-weight: bold;" if (isinstance(x, str) and "⚠️" in x) else ""
+            )
+            
+            st.dataframe(styled_infra, use_container_width=True, hide_index=True)
+            
+            st.info(
+                "💡 **Nota sobre las Fórmulas aplicadas:** "
+                "La VRAM Base incluye los pesos del modelo cuantizados más un 5% de activaciones. "
+                "La caché KV se calcula según la arquitectura de atención del modelo (MHA, GQA o MLA) para el contexto indicado. "
+                "La VRAM Peak añade un 20% de margen de seguridad y 2 GB de CUDA runtime."
+            )
+
+        with tab_filtros:
+            col_f1, col_f2 = st.columns(2)
+            with col_f1:
+                st.markdown("##### 💻 Preferencias de Negocio y Despliegue")
+                st.selectbox(
+                    "💻 Entorno de Despliegue",
+                    options=["Solo Local (Privado / GGUF)", "Solo Cloud (APIs / OpenRouter)", "Ambos (Híbrido)"],
+                    key="temp_deployment_type",
+                    on_change=update_deployment_type,
+                    help="Local garantiza privacidad total de los datos usando hardware propio. Cloud ofrece mayor velocidad pero requiere pago por token a proveedores externos."
                 )
-            }
-        )
-        
-        # Controles inferiores de paginación (Anterior / Siguiente)
-        if rows_choice != "Todos" and total_pages > 1:
-            col_pag1, col_pag2, col_pag3 = st.columns([1, 2, 1])
-            with col_pag2:
-                st.markdown(f"<div style='text-align: center; color: #6B7280;'>Página **{st.session_state.current_page + 1}** de **{total_pages}** (Mostrando modelos {start_row + 1} a {min(end_row, total_rows)} de {total_rows})</div>", unsafe_allow_html=True)
-            with col_pag1:
-                if st.button("⬅️ Anterior", disabled=(st.session_state.current_page == 0), use_container_width=True):
-                    st.session_state.current_page -= 1
-                    st.rerun()
-            with col_pag3:
-                if st.button("Siguiente ➡️", disabled=(st.session_state.current_page == total_pages - 1), use_container_width=True):
-                    st.session_state.current_page += 1
-                    st.rerun()
+                
+                # Explicar la lógica de filtrado según la opción
+                if st.session_state.deployment_type == "Solo Local (Privado / GGUF)":
+                    st.info("🔒 **Filtro Local Activo:** Solo se muestran modelos compatibles con alojamiento local y con límite de VRAM física.")
+                elif st.session_state.deployment_type == "Solo Cloud (APIs / OpenRouter)":
+                    st.warning("🌐 **Filtro Cloud Activo:** Se ignora la VRAM del servidor local. La inferencia se realiza mediante APIs en la nube.")
+                else:
+                    st.success("⚖️ **Modo Híbrido Activo:** Se muestran y comparan todas las alternativas (Local y Cloud).")
+                
+                st.slider(
+                    "🧠 Peso de Calidad Técnica (IFEval, MMLU)",
+                    min_value=0,
+                    max_value=100,
+                    key="temp_weight_quality",
+                    on_change=update_weight_quality,
+                    help="IFEval mide el cumplimiento estricto de formato de instrucciones (vital para el formato de TDRs Legales)."
+                )
+                st.slider(
+                    "⚡ Peso de Velocidad (Tokens/s)",
+                    min_value=0,
+                    max_value=100,
+                    key="temp_weight_speed",
+                    on_change=update_weight_speed,
+                    help="Ponderación dada a la latencia inicial (TTFT) y a la velocidad de respuesta."
+                )
+                
+                # Dynamic labels for efficiency
+                if st.session_state.deployment_type == "Solo Local (Privado / GGUF)":
+                    efficiency_label = "💾 Eficiencia de VRAM"
+                    efficiency_help = "Ponderación dada a la optimización de uso de VRAM y cuantización (GGUF/AWQ/GPTQ) para hosting local."
+                elif st.session_state.deployment_type == "Solo Cloud (APIs / OpenRouter)":
+                    efficiency_label = "🪙 Menor Coste por Token"
+                    efficiency_help = "Ponderación dada a minimizar la facturación mensual por millón de tokens en APIs."
+                else:
+                    efficiency_label = "💰 Eficiencia de VRAM / Coste"
+                    efficiency_help = "Ponderación equilibrada para VRAM local y tarifas de APIs cloud."
+                    
+                st.slider(
+                    efficiency_label,
+                    min_value=0,
+                    max_value=100,
+                    key="temp_weight_efficiency",
+                    on_change=update_weight_efficiency,
+                    help=efficiency_help
+                )
+                
+                st.markdown(f"""
+                <div style="background-color: #F2F2F2; padding: 6px 12px; border-radius: 6px; display: flex; justify-content: space-around; align-items: center; border: 1px solid #E5E7EB; margin-top: 8px;">
+                    <span style="font-size: 0.78rem; color: #0B0F19;">🧠 Calidad Técnica: <strong style="color: #0039AA;">{st.session_state.weight_quality}%</strong></span>
+                    <span style="font-size: 0.78rem; color: #0B0F19; border-left: 1px solid #D1D5DB; padding-left: 15px;">⚡ Velocidad: <strong style="color: #35CC29;">{st.session_state.weight_speed}%</strong></span>
+                    <span style="font-size: 0.78rem; color: #0B0F19; border-left: 1px solid #D1D5DB; padding-left: 15px;">💼 {efficiency_label.split(' ', 1)[-1]}: <strong style="color: #F6A229;">{st.session_state.weight_efficiency}%</strong></span>
+                </div>
+                """, unsafe_allow_html=True)
 
-        # --- 3.3 Sección de Validación y Simulación de Infraestructura ---
-        st.markdown("""
-        <div style="margin-top: 8px; margin-bottom: 4px;">
-            <h3 style="margin: 0; font-size: 1.1rem; color: #0039AA; font-weight: 700;">🎯 Validación y Simulación de Infraestructura</h3>
-        </div>
-        """, unsafe_allow_html=True)
-        
-        # Obtener los modelos ordenados de df_catalog
-        model_options = df_catalog["Modelo"].tolist()
-        
-        # Encontrar el índice del modelo validado actual
-        clean_options = [m.replace("⭐ ", "").replace(" (Recomendado)", "") for m in model_options]
-        default_idx = 0
-        if st.session_state.validated_model_name in clean_options:
-            default_idx = clean_options.index(st.session_state.validated_model_name)
-            
-        selected_display_name = st.selectbox(
-            "🤖 Modelo a Validar y Simular:",
-            options=model_options,
-            index=default_idx,
-            help="Selecciona un modelo del catálogo. Se recalcularán las métricas de saturación y VRAM en tiempo real."
-        )
-        
-        # Si el modelo seleccionado cambió, actualizar el estado y hacer rerun
-        clean_selected_name = selected_display_name.replace("⭐ ", "").replace(" (Recomendado)", "")
-        if clean_selected_name != st.session_state.validated_model_name:
-            selected_row = df_raw[df_raw["name"] == clean_selected_name]
-            if not selected_row.empty:
-                st.session_state.validated_model = selected_row.iloc[0]["model_id"]
-                st.session_state.validated_model_name = clean_selected_name
-                st.rerun()
+            with col_f2:
+                st.markdown("##### ⚙️ Configuración Avanzada del Motor de Inferencia")
+                st.number_input(
+                    "Número de GPUs (Tensor Parallelism - TP)",
+                    min_value=1,
+                    step=1,
+                    key="temp_gpus_tp",
+                    on_change=update_gpus_tp,
+                    help="Divide las matrices del modelo entre varias tarjetas gráficas interconectadas para aumentar la VRAM total y reducir latencia."
+                )
+                st.slider(
+                    "Utilización de VRAM (gpu_memory_utilization)",
+                    min_value=0.70,
+                    max_value=0.99,
+                    step=0.01,
+                    key="temp_gpu_memory_utilization",
+                    on_change=update_gpu_memory_utilization,
+                    help="Porcentaje de la VRAM reservado para los pesos y la Caché KV. Superar el 0.95 aumenta el riesgo de error Out Of Memory (OOM) por picos de activaciones."
+                )
+                st.selectbox(
+                    "Motor de Inferencia y Atención",
+                    options=["vLLM (PagedAttention)", "SGLang (RadixAttention)"],
+                    key="temp_inference_engine",
+                    on_change=update_inference_engine,
+                    help="PagedAttention divide el KV Cache en bloques lógicos. RadixAttention permite compartir prefijos en un árbol de búsqueda para reutilizar contextos comunes."
+                )
+                st.toggle(
+                    "Loteamiento Continuo (Continuous Batching)",
+                    key="temp_continuous_batching",
+                    on_change=update_continuous_batching,
+                    help="Inyecta nuevas peticiones en el instante exacto en que otra termina, maximizando la ocupación del procesador."
+                )
+                st.toggle(
+                    "Prellenado Fraccionado (Chunked Prefill)",
+                    key="temp_chunked_prefill",
+                    on_change=update_chunked_prefill,
+                    help="Fragmenta la lectura de documentos gigantes para no congelar a los usuarios que ya están en la cola de generación."
+                )
+                
+                st.markdown("##### ☁️ Optimización de Costos Cloud (Prompt Caching)")
+                st.slider(
+                    "Tasa de Acierto de Caché (Cache Hit Rate %)",
+                    min_value=0,
+                    max_value=100,
+                    key="temp_cache_hit_rate",
+                    on_change=update_cache_hit_rate,
+                    help="""💡 **Criterios para estimar la Tasa de Acierto (Hit Rate):**
 
-        # Renderizar las KPI Cards para el modelo validado
-        if vram_calc is not None:
-            st.markdown(f"### 📊 Métricas de Despliegue para `{st.session_state.validated_model_name}`")
-            col_kpi1, col_kpi2, col_kpi3, col_kpi4 = st.columns(4)
-            
-            vram_total = st.session_state.server_vram * st.session_state.gpus_tp
-            with col_kpi1:
-                st.markdown(f"""
-                <div class="glass-card">
-                    <div class="metric-label">VRAM Total Disponible</div>
-                    <div class="metric-value">{vram_total * st.session_state.gpu_memory_utilization:.1f} GB</div>
-                    <span style="color: #64748B; font-size: 0.8rem;">Física: {vram_total:.1f} GB (TP: {st.session_state.gpus_tp} GPUs)</span>
-                </div>
-                """, unsafe_allow_html=True)
-            
-            with col_kpi2:
-                st.markdown(f"""
-                <div class="glass-card">
-                    <div class="metric-label">VRAM Modelo Base</div>
-                    <div class="metric-value">{vram_calc['base_vram_gb']} GB</div>
-                    <span style="color: #64748B; font-size: 0.8rem;">Pesos del modelo en FP16</span>
-                </div>
-                """, unsafe_allow_html=True)
-            
-            with col_kpi3:
-                st.markdown(f"""
-                <div class="glass-card">
-                    <div class="metric-label">KV Cache / Usuario</div>
-                    <div class="metric-value">{vram_calc['kv_cache_per_user_gb'] * 1024:.2f} MB</div>
-                    <span style="color: #64748B; font-size: 0.8rem;">Para contexto de {st.session_state.context_length:,} tokens</span>
-                </div>
-                """, unsafe_allow_html=True)
-            
-            with col_kpi4:
-                st.markdown(f"""
-                <div class="glass-card">
-                    <div class="metric-label">Slots Físicos (m)</div>
-                    <div class="metric-value">{physical_servers_m}</div>
-                    <span style="color: #64748B; font-size: 0.8rem;">Hilos de ejecución en paralelo</span>
-                </div>
-                """, unsafe_allow_html=True)
+• **RAG Estático / Fijo (70% - 90%):** Análisis continuo de un mismo documento extenso durante toda la sesión (ej. auditar un TDR específico).
+• **RAG Dinámico / Semántico (0% - 20%):** Si el buscador recupera fragmentos y artículos distintos en cada pregunta del chat.
+• **Límite Conversacional:** Acotado matemáticamente por (N-1)/N (donde N son los turnos de chat). Para N=5 turnos, el máximo teórico es 80% ya que el primer mensaje siempre es frío (fase de escritura).
+• **TTL de Expiración:** Si las preguntas del usuario ocurren de forma espaciada por más de 5-10 minutos, la caché se habrá evaporado de los servidores (tasa real cae a 0%)."""
+                )
+                st.number_input(
+                    "Turnos de Chat por Sesión (N)",
+                    min_value=1,
+                    max_value=30,
+                    step=1,
+                    key="temp_session_turns",
+                    on_change=update_session_turns,
+                    help="Número promedio de mensajes que intercambia un usuario sobre el mismo documento o contexto de consulta en una sesión."
+                )
 
 st.write("---")
 
@@ -1432,7 +1602,7 @@ with tab4:
                 server_vram=st.session_state.server_vram,
                 context_length=st.session_state.context_length,
                 concurrent_users=st.session_state.concurrent_users,
-                limite_modelos=1000  # Carga de catálogo completa
+                limite_modelos=100000  # Carga de catálogo completa sin límite restrictivo (ej. 100,000)
             )
             st.session_state.validated_model = None
             st.session_state.validated_model_name = None

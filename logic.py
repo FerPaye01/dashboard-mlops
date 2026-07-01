@@ -57,9 +57,22 @@ class LLMDataIngester:
             models = []
             for item in data.get("data", []):
                 pricing = item.get("pricing", {})
-                # Normalización a $USD / 1M tokens
-                prompt_cost = float(pricing.get("prompt", 0)) * 1_000_000
-                completion_cost = float(pricing.get("completion", 0)) * 1_000_000
+                # Normalización a $USD / 1M tokens (tratar sentinels/valores negativos como 0.0)
+                prompt_val = float(pricing.get("prompt", 0))
+                completion_val = float(pricing.get("completion", 0))
+                prompt_cost = max(0.0, prompt_val) * 1_000_000
+                completion_cost = max(0.0, completion_val) * 1_000_000
+                
+                # Ingesta de precios de cache si están disponibles en la respuesta de la API (con manejo de errores robusto)
+                try:
+                    cache_read_cost = max(0.0, float(pricing.get("input_cache_read"))) * 1_000_000 if pricing.get("input_cache_read") is not None else prompt_cost
+                except (ValueError, TypeError):
+                    cache_read_cost = prompt_cost
+                    
+                try:
+                    cache_write_cost = max(0.0, float(pricing.get("input_cache_write"))) * 1_000_000 if pricing.get("input_cache_write") is not None else prompt_cost
+                except (ValueError, TypeError):
+                    cache_write_cost = prompt_cost
                 
                 models.append({
                     "model_id": item.get("id"),
@@ -67,6 +80,8 @@ class LLMDataIngester:
                     "context_length": item.get("context_length", 8000),
                     "cost_input_per_m": prompt_cost,
                     "cost_output_per_m": completion_cost,
+                    "cost_cache_read_per_m": cache_read_cost,
+                    "cost_cache_write_per_m": cache_write_cost,
                     "hosting": "Solo Cloud (APIs / OpenRouter)"
                 })
             return models
@@ -155,7 +170,10 @@ class LLMDataIngester:
         if not or_data and hf_df.empty:
             return pd.DataFrame()
             
-        or_df = pd.DataFrame(or_data) if or_data else pd.DataFrame(columns=["model_id", "name", "context_length", "cost_input_per_m", "cost_output_per_m", "hosting"])
+        or_df = pd.DataFrame(or_data) if or_data else pd.DataFrame(columns=[
+            "model_id", "name", "context_length", "cost_input_per_m", "cost_output_per_m", 
+            "cost_cache_read_per_m", "cost_cache_write_per_m", "hosting"
+        ])
         aa_df = pd.DataFrame(aa_data) if aa_data else pd.DataFrame(columns=["model_id", "tps", "ttft_ms"])
         
         def normalize_id(mid):
@@ -215,6 +233,8 @@ class LLMDataIngester:
                     "ttft_ms": 120 + int(params_b * 4),
                     "cost_input_per_m": 0.0,
                     "cost_output_per_m": 0.0,
+                    "cost_cache_read_per_m": 0.0,
+                    "cost_cache_write_per_m": 0.0,
                     "format": "Local",
                     "ifeval": float(row.get("ifeval")) if row.get("ifeval") is not None and not pd.isna(row.get("ifeval")) else None,
                     "mmlu": float(row.get("mmlu")) if row.get("mmlu") is not None and not pd.isna(row.get("mmlu")) else None,
@@ -270,6 +290,8 @@ class LLMDataIngester:
                     "ttft_ms": 200 + (300 if params_b > 50 else 100),
                     "cost_input_per_m": float(row["cost_input_per_m"]),
                     "cost_output_per_m": float(row["cost_output_per_m"]),
+                    "cost_cache_read_per_m": float(row.get("cost_cache_read_per_m", row["cost_input_per_m"])),
+                    "cost_cache_write_per_m": float(row.get("cost_cache_write_per_m", row["cost_input_per_m"])),
                     "format": "API / SaaS",
                     "ifeval": ifeval,
                     "mmlu": mmlu,
@@ -380,18 +402,23 @@ def get_leaderboard_database() -> pd.DataFrame:
         return pd.DataFrame(columns=["model_id", "ifeval", "mmlu", "gpqa"])
     return df[["model_id", "ifeval", "mmlu", "gpqa"]].drop_duplicates(subset=["model_id"])
 
-def find_official_benchmarks(model_id: str) -> dict | None:
-    m_id_lower = model_id.lower()
+@st.cache_data
+def load_all_official_benchmarks() -> dict:
     registry_path = os.path.join(os.path.dirname(__file__), "official_quality_benchmarks.json")
     if os.path.exists(registry_path):
         try:
             with open(registry_path, "r", encoding="utf-8") as f:
-                benchmarks = json.load(f)
-                for key, scores in benchmarks.items():
-                    if key.lower() in m_id_lower:
-                        return scores
+                return json.load(f)
         except Exception:
             pass
+    return {}
+
+def find_official_benchmarks(model_id: str) -> dict | None:
+    m_id_lower = model_id.lower()
+    benchmarks = load_all_official_benchmarks()
+    for key, scores in benchmarks.items():
+        if key.lower() in m_id_lower:
+            return scores
     return None
 
 def estimate_vram_requirements(
