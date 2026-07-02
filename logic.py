@@ -239,6 +239,8 @@ class LLMDataIngester:
                     "ifeval": float(row.get("ifeval")) if row.get("ifeval") is not None and not pd.isna(row.get("ifeval")) else None,
                     "mmlu": float(row.get("mmlu")) if row.get("mmlu") is not None and not pd.isna(row.get("mmlu")) else None,
                     "gpqa": float(row.get("gpqa")) if row.get("gpqa") is not None and not pd.isna(row.get("gpqa")) else None,
+                    # ⚠️ CRÍTICO: Indica que este modelo proviene del Hugging Face Leaderboard oficial.
+                    # No remover este flag, ya que la UI de app.py lo utiliza para renderizar los benchmarks sin avisos de advertencia.
                     "benchmarks_verificados": True
                 }
 
@@ -296,6 +298,7 @@ class LLMDataIngester:
                     "ifeval": ifeval,
                     "mmlu": mmlu,
                     "gpqa": gpqa,
+                    # ⚠️ CRÍTICO: Se hereda la verificación del modelo si coincidió con un registro en el Hugging Face Leaderboard.
                     "benchmarks_verificados": bench_verified
                 }
                 

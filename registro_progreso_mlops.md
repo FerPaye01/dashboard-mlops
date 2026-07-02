@@ -16,7 +16,7 @@ Se han consolidado múltiples mejoras de infraestructura, matemáticas de estima
 *   **Tabla de Clasificación Limpia:** Se ocultaron las columnas técnicas redundantes de **"Alojamiento"** y **"Atención"** de la tabla principal para evitar la sobrecarga cognitiva.
 
 ### B. Corrección de Errores Críticos de Cálculo (Overflow de Eficiencia)
-*   **Identificación del Bug:** La API de OpenRouter devuelve valores centinela de `-1` en los campos de precio para modelos con enrutamiento dinámico (ej: `openrouter/fusion`). Al multiplicar por un millón, esto generaba un costo de entrada de `-$1,000,000.00`, desbordando la fórmula de eficiencia de Cloud/Híbrida por encima de los 28 millones por ciento.
+*   **Identificación del Bug:** La API de OpenRouter devuelve valores   centinela de `-1` en los campos de precio para modelos con enrutamiento dinámico (ej: `openrouter/fusion`). Al multiplicar por un millón, esto generaba un costo de entrada de `-$1,000,000.00`, desbordando la fórmula de eficiencia de Cloud/Híbrida por encima de los 28 millones por ciento.
 *   **Solución:**
     *   Se implementó saneamiento en `logic.py` para mapear precios negativos de API a `0.0`.
     *   Se aplicó doble validación en `app.py` utilizando `max(0.0, cost)` para neutralizar valores heredados corruptos.
@@ -37,6 +37,13 @@ Se han consolidado múltiples mejoras de infraestructura, matemáticas de estima
 
 ### E. Integración de Tooltip MLOps Educativo
 *   Se incorporó un tooltip explicativo en el slider de **Tasa de Acierto de Caché (Hit Rate %)**, guiando al usuario sobre cuándo usar valores altos (RAG estático sobre TDRs largos: 70-90%) y cuándo valores bajos (RAG dinámico: 0-20%), considerando también el límite teórico dado por $\frac{N-1}{N}$ y el TTL de expiración por inactividad.
+
+### F. Independencia de Pesos de Negocio, Ponderación Fina de Benchmarks y Restricciones Blandas
+*   **Ponderación Plana e Independiente (Sin Redundancia):** Se eliminó el slider de nivel superior "Peso de Calidad Técnica" por ser redundante. Ahora todas las métricas (benchmarks de calidad IFEval, MMLU, GPQA, y atributos de hardware/costo Velocidad, Eficiencia, Tamaño) se configuran en un único nivel de ponderación plano e independiente (no restrictivo/suma cero).
+*   **Puntaje Final Plano Normalizado:** El puntaje final se calcula como el promedio ponderado plano de todas las métricas activas según los pesos asignados por el usuario.
+*   **Penalización por Tamaño de Parámetros:** Se introdujo un slider de peso de tamaño de modelo. Al aumentar este valor, se penaliza a los modelos grandes y se beneficia a los modelos más ligeros y eficientes en la clasificación final.
+*   **Flexibilización de Restricciones Físicas (Blandas):** Se eliminó el bloqueo estricto de compatibilidad por VRAM física. Los modelos locales que excedan la memoria local disponible de la GPU ya no son forzados como incompatibles o enviados al final de la tabla de forma binaria. En su lugar, el exceso se reporta informativamente como `⚠️ VRAM Excedida` (en rojo bold) y la clasificación final se calcula de forma blanda mediante la penalización de tamaño y el score de eficiencia de VRAM.
+*   **Cálculo de Calidad Resiliente:** Si a un modelo le falta algún benchmark (ej: GPQA no reportado), el sistema ya no le asigna `0.0` de calidad. En su lugar, calcula el promedio ponderado dinámico considerando únicamente los pesos de los benchmarks activos y presentes.
 
 ---
 

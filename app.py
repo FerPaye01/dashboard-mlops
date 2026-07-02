@@ -300,12 +300,18 @@ if 'local_quantization' not in st.session_state:
     st.session_state.local_quantization = "FP16 / BF16 (Nativo - 16 bits)"
 
 # Inicialización de las variables de la Fase 2 en st.session_state
-if 'weight_quality' not in st.session_state:
-    st.session_state.weight_quality = 60
 if 'weight_speed' not in st.session_state:
     st.session_state.weight_speed = 20
 if 'weight_efficiency' not in st.session_state:
     st.session_state.weight_efficiency = 20
+if 'weight_ifeval' not in st.session_state:
+    st.session_state.weight_ifeval = 60
+if 'weight_mmlu' not in st.session_state:
+    st.session_state.weight_mmlu = 30
+if 'weight_gpqa' not in st.session_state:
+    st.session_state.weight_gpqa = 10
+if 'weight_model_size' not in st.session_state:
+    st.session_state.weight_model_size = 0
 if 'deployment_type' not in st.session_state:
     st.session_state.deployment_type = "Ambos (Híbrido)"
 
@@ -342,12 +348,18 @@ if 'temp_concurrent_users' not in st.session_state:
 if 'temp_user_activity_rate' not in st.session_state:
     st.session_state.temp_user_activity_rate = int(st.session_state.user_activity_rate * 100)
 
-if 'temp_weight_quality' not in st.session_state:
-    st.session_state.temp_weight_quality = st.session_state.weight_quality
 if 'temp_weight_speed' not in st.session_state:
     st.session_state.temp_weight_speed = st.session_state.weight_speed
 if 'temp_weight_efficiency' not in st.session_state:
     st.session_state.temp_weight_efficiency = st.session_state.weight_efficiency
+if 'temp_weight_ifeval' not in st.session_state:
+    st.session_state.temp_weight_ifeval = st.session_state.weight_ifeval
+if 'temp_weight_mmlu' not in st.session_state:
+    st.session_state.temp_weight_mmlu = st.session_state.weight_mmlu
+if 'temp_weight_gpqa' not in st.session_state:
+    st.session_state.temp_weight_gpqa = st.session_state.weight_gpqa
+if 'temp_weight_model_size' not in st.session_state:
+    st.session_state.temp_weight_model_size = st.session_state.weight_model_size
 if 'temp_deployment_type' not in st.session_state:
     st.session_state.temp_deployment_type = st.session_state.deployment_type
 if 'temp_rows_per_page' not in st.session_state:
@@ -444,50 +456,25 @@ def update_session_turns():
 def update_local_quantization():
     st.session_state.local_quantization = st.session_state.temp_local_quantization
 
-def update_weight_quality():
-    w_dict = {
-        'weight_quality': st.session_state.temp_weight_quality,
-        'weight_speed': st.session_state.weight_speed,
-        'weight_efficiency': st.session_state.weight_efficiency
-    }
-    new_w = normalize_weights('weight_quality', w_dict)
-    st.session_state.weight_quality = new_w['weight_quality']
-    st.session_state.weight_speed = new_w['weight_speed']
-    st.session_state.weight_efficiency = new_w['weight_efficiency']
-    
-    st.session_state.temp_weight_quality = new_w['weight_quality']
-    st.session_state.temp_weight_speed = new_w['weight_speed']
-    st.session_state.temp_weight_efficiency = new_w['weight_efficiency']
+
 
 def update_weight_speed():
-    w_dict = {
-        'weight_quality': st.session_state.weight_quality,
-        'weight_speed': st.session_state.temp_weight_speed,
-        'weight_efficiency': st.session_state.weight_efficiency
-    }
-    new_w = normalize_weights('weight_speed', w_dict)
-    st.session_state.weight_quality = new_w['weight_quality']
-    st.session_state.weight_speed = new_w['weight_speed']
-    st.session_state.weight_efficiency = new_w['weight_efficiency']
-    
-    st.session_state.temp_weight_quality = new_w['weight_quality']
-    st.session_state.temp_weight_speed = new_w['weight_speed']
-    st.session_state.temp_weight_efficiency = new_w['weight_efficiency']
+    st.session_state.weight_speed = st.session_state.temp_weight_speed
 
 def update_weight_efficiency():
-    w_dict = {
-        'weight_quality': st.session_state.weight_quality,
-        'weight_speed': st.session_state.weight_speed,
-        'weight_efficiency': st.session_state.temp_weight_efficiency
-    }
-    new_w = normalize_weights('weight_efficiency', w_dict)
-    st.session_state.weight_quality = new_w['weight_quality']
-    st.session_state.weight_speed = new_w['weight_speed']
-    st.session_state.weight_efficiency = new_w['weight_efficiency']
-    
-    st.session_state.temp_weight_quality = new_w['weight_quality']
-    st.session_state.temp_weight_speed = new_w['weight_speed']
-    st.session_state.temp_weight_efficiency = new_w['weight_efficiency']
+    st.session_state.weight_efficiency = st.session_state.temp_weight_efficiency
+
+def update_weight_ifeval():
+    st.session_state.weight_ifeval = st.session_state.temp_weight_ifeval
+
+def update_weight_mmlu():
+    st.session_state.weight_mmlu = st.session_state.temp_weight_mmlu
+
+def update_weight_gpqa():
+    st.session_state.weight_gpqa = st.session_state.temp_weight_gpqa
+
+def update_weight_model_size():
+    st.session_state.weight_model_size = st.session_state.temp_weight_model_size
 
 def update_deployment_type():
     st.session_state.deployment_type = st.session_state.temp_deployment_type
@@ -790,8 +777,15 @@ else:
     
     # Sobrescribir dinámicamente con los benchmarks oficiales verificados en caliente
     # para evitar problemas de caché, CSV o session state desactualizados.
+    #
+    # ⚠️ ATENCIÓN / PREVENCIÓN DE BUGS:
+    # NO inicializar 'df_raw["benchmarks_verificados"] = False' de forma global. 
+    # Hacerlo destruye el flag 'True' de los modelos que fueron verificados y descargados 
+    # legítimamente desde el Hugging Face Open LLM Leaderboard en 'logic.py'.
+    # Solo inicializar en False si la columna no existe en el DataFrame.
     from logic import find_official_benchmarks
-    df_raw["benchmarks_verificados"] = False
+    if "benchmarks_verificados" not in df_raw.columns:
+        df_raw["benchmarks_verificados"] = False
     for idx, row in df_raw.iterrows():
         official = find_official_benchmarks(row["model_id"])
         if official:
@@ -878,11 +872,10 @@ else:
             is_compatible = False
             reason = "⚠️ Requiere Local"
         
-        # Verificar límite de VRAM física para hosting local
+        # Verificar límite de VRAM física para hosting local (se mantiene de forma informativa sin bloquear compatibilidad)
         if is_compatible:
             if hosting == "Solo Local (Privado / GGUF)" or (dep_choice == "Solo Local (Privado / GGUF)"):
                 if vram_peak > available_vram:
-                    is_compatible = False
                     reason = "⚠️ VRAM Excedida"
             elif dep_choice == "Ambos (Híbrido)" and hosting == "Both":
                 # Si el modelo soporta local pero excede la VRAM física disponible, se asume alojamiento Cloud
@@ -890,17 +883,30 @@ else:
                     hosting = "Solo Cloud (APIs / OpenRouter) [Fallback]"
                     vram_peak = 0.0
             
-        # 3. Calcular sub-puntajes normalizados (0-100)
+        # 3. Calcular sub-puntajes normalizados (0-100) de Benchmarks con pesos configurables
         ifeval_raw = row.get("ifeval")
         mmlu_raw = row.get("mmlu")
         gpqa_raw = row.get("gpqa")
         
-        has_quality = (ifeval_raw is not None and not pd.isna(ifeval_raw) and 
-                       mmlu_raw is not None and not pd.isna(mmlu_raw) and 
-                       gpqa_raw is not None and not pd.isna(gpqa_raw))
+        w_ifeval = float(st.session_state.weight_ifeval)
+        w_mmlu = float(st.session_state.weight_mmlu)
+        w_gpqa = float(st.session_state.weight_gpqa)
         
-        if has_quality:
-            quality_score = (float(ifeval_raw) * 0.60) + (float(mmlu_raw) * 0.30) + (float(gpqa_raw) * 0.10)
+        weighted_quality_sum = 0.0
+        active_quality_weights_sum = 0.0
+        
+        if ifeval_raw is not None and not pd.isna(ifeval_raw):
+            weighted_quality_sum += float(ifeval_raw) * w_ifeval
+            active_quality_weights_sum += w_ifeval
+        if mmlu_raw is not None and not pd.isna(mmlu_raw):
+            weighted_quality_sum += float(mmlu_raw) * w_mmlu
+            active_quality_weights_sum += w_mmlu
+        if gpqa_raw is not None and not pd.isna(gpqa_raw):
+            weighted_quality_sum += float(gpqa_raw) * w_gpqa
+            active_quality_weights_sum += w_gpqa
+            
+        if active_quality_weights_sum > 0:
+            quality_score = weighted_quality_sum / active_quality_weights_sum
         else:
             quality_score = 0.0
         
@@ -967,12 +973,45 @@ else:
             eff_cost = min(100.0, max(0.0, (1.0 - (cost_m / max_cost_m)) * 100.0))
             efficiency_score = (eff_vram + eff_cost) / 2.0
             
-        # 4. Calcular Score Final Ponderado
-        w_q = st.session_state.weight_quality / 100.0
-        w_s = st.session_state.weight_speed / 100.0
-        w_e = st.session_state.weight_efficiency / 100.0
+        # 4. Calcular Score Final Ponderado (No restrictivo / Promedio Ponderado Plano Normalizado)
+        w_ifeval = float(st.session_state.weight_ifeval)
+        w_mmlu = float(st.session_state.weight_mmlu)
+        w_gpqa = float(st.session_state.weight_gpqa)
+        w_speed = float(st.session_state.weight_speed)
+        w_efficiency = float(st.session_state.weight_efficiency)
+        w_size = float(st.session_state.weight_model_size)
         
-        total_score = (quality_score * w_q) + (speed_score * w_s) + (efficiency_score * w_e)
+        weighted_sum = 0.0
+        weights_sum = 0.0
+        
+        # Benchmarks de calidad
+        if ifeval_raw is not None and not pd.isna(ifeval_raw):
+            weighted_sum += float(ifeval_raw) * w_ifeval
+            weights_sum += w_ifeval
+        if mmlu_raw is not None and not pd.isna(mmlu_raw):
+            weighted_sum += float(mmlu_raw) * w_mmlu
+            weights_sum += w_mmlu
+        if gpqa_raw is not None and not pd.isna(gpqa_raw):
+            weighted_sum += float(gpqa_raw) * w_gpqa
+            weights_sum += w_gpqa
+            
+        # Rendimiento, Eficiencia y Tamaño
+        weighted_sum += speed_score * w_speed
+        weights_sum += w_speed
+        
+        weighted_sum += efficiency_score * w_efficiency
+        weights_sum += w_efficiency
+        
+        # Puntuación de tamaño (para penalizar modelos grandes si w_size > 0):
+        # 0B = 100% (máxima optimización de tamaño), 120B o superior = 0%.
+        size_score = max(0.0, 100.0 - (params_b * 100.0 / 120.0))
+        weighted_sum += size_score * w_size
+        weights_sum += w_size
+        
+        if weights_sum > 0:
+            total_score = weighted_sum / weights_sum
+        else:
+            total_score = 0.0
         
         is_verified = bool(row.get("benchmarks_verificados", False))
         ifeval_val = f"{ifeval_raw:.1f}%" if (ifeval_raw is not None and not pd.isna(ifeval_raw)) else "N/A"
@@ -1262,6 +1301,44 @@ else:
             col_f1, col_f2 = st.columns(2)
             with col_f1:
                 st.markdown("##### 💻 Preferencias de Negocio y Despliegue")
+                
+                with st.popover("ℹ️ Explicación de Fórmulas y Sliders"):
+                    st.markdown("""
+                    ### 🧮 Guía Matemática y Uso de Ponderaciones
+                    
+                    El sistema utiliza un modelo de **ponderación independiente** y **no restrictivo** (no es de suma cero) que calcula promedios ponderados normalizados:
+                    
+                    #### 1. Puntaje Final Ponderado
+                    Calcula una puntuación consolidada del $0\\%$ al $100\\%$ ponderando las cuatro dimensiones principales:
+                    $$P_{\\text{final}} = \\frac{S_q \\cdot W_q + S_s \\cdot W_s + S_e \\cdot W_e + S_{\\text{tamaño}} \\cdot W_{\\text{tamaño}}}{W_q + W_s + W_e + W_{\\text{tamaño}}}$$
+                    Donde:
+                    *   $S_q$: Puntaje de **Calidad Técnica** (basado en benchmarks de calidad).
+                    *   $S_s$: Puntaje de **Velocidad y Latencia** (Tokens/s y TTFT).
+                    *   $S_e$: Puntaje de **Eficiencia** (VRAM en Local, costo por token en Cloud).
+                    *   $S_{\\text{tamaño}}$: Puntaje de **Tamaño del Modelo** (penalización por billones de parámetros).
+                    *   $W_q, W_s, W_e, W_{\\text{tamaño}}$: Pesos asignados por el usuario mediante los sliders principales.
+                    
+                    #### 2. Calidad Técnica Dinámica ($S_q$)
+                    Calcula la calidad promedio considerando únicamente los benchmarks disponibles del modelo (evita penalizar a modelos que carecen de alguna métrica):
+                    $$S_q = \\frac{\\sum (B_i \\cdot W_i)}{\\sum W_i}$$
+                    Donde $B_i \\in \\{\\text{IFEval}, \\text{MMLU}, \\text{GPQA}\\}$ y $W_i \\in \\{W_{\\text{ifeval}}, W_{\\text{mmlu}}, W_{\\text{gpqa}}\\}$.
+                    
+                    #### 3. Penalización por Tamaño ($S_{\\text{tamaño}}$)
+                    Mide qué tan ligero y eficiente es el tamaño físico del modelo en base a sus parámetros ($P_B$):
+                    $$S_{\\text{tamaño}} = \\max\\left(0.0, 100.0 - \\frac{P_B \\cdot 100}{120.0}\\right)$$
+                    *(Un modelo de 8B obtiene $93.3\\%$, uno de 70B obtiene $41.7\\%$, y uno de 120B o mayor obtiene $0.0\\%$)*.
+                    
+                    ---
+                    ### 🎛️ Guía de Uso de los Sliders
+                    *   **Sliders Principales:**
+                        *   **Calidad:** Incrementa para priorizar la exactitud en la auditoría de TDRs.
+                        *   **Velocidad:** Incrementa para escenarios de alta concurrencia donde la respuesta rápida es clave.
+                        *   **Eficiencia:** Incrementa si deseas optimizar la VRAM física disponible (en Local) o reducir costos de APIs (en Cloud).
+                    *   **Sliders Detallados:**
+                        *   **IFEval:** Sube para forzar que el modelo respete estrictamente formatos estructurados (muy importante en documentos regulatorios y de bases legales).
+                        *   **MMLU / GPQA:** MMLU mide conocimientos generales de redacción; GPQA mide razonamiento lógico-científico complejo de nivel experto.
+                        *   **Tamaño:** Sube si quieres favorecer modelos locales ligeros y rechazar modelos excesivamente grandes.
+                    """)
                 st.selectbox(
                     "💻 Entorno de Despliegue",
                     options=["Solo Local (Privado / GGUF)", "Solo Cloud (APIs / OpenRouter)", "Ambos (Híbrido)"],
@@ -1278,16 +1355,34 @@ else:
                 else:
                     st.success("⚖️ **Modo Híbrido Activo:** Se muestran y comparan todas las alternativas (Local y Cloud).")
                 
+                st.markdown("##### ⚙️ Ponderación Detallada de Atributos y Benchmarks")
+                
                 st.slider(
-                    "🧠 Peso de Calidad Técnica (IFEval, MMLU)",
+                    "⚖️ Peso IFEval (Cumplimiento de Formato Legal)",
                     min_value=0,
                     max_value=100,
-                    key="temp_weight_quality",
-                    on_change=update_weight_quality,
-                    help="IFEval mide el cumplimiento estricto de formato de instrucciones (vital para el formato de TDRs Legales)."
+                    key="temp_weight_ifeval",
+                    on_change=update_weight_ifeval,
+                    help="Mide el cumplimiento estricto de formato de instrucciones (vital para el formato de TDRs Legales)."
                 )
                 st.slider(
-                    "⚡ Peso de Velocidad (Tokens/s)",
+                    "🧠 Peso MMLU (Comprensión General de Texto)",
+                    min_value=0,
+                    max_value=100,
+                    key="temp_weight_mmlu",
+                    on_change=update_weight_mmlu,
+                    help="Ponderación de MMLU. Mide habilidades de comprensión general."
+                )
+                st.slider(
+                    "🧪 Peso GPQA (Razonamiento Lógico y Científico)",
+                    min_value=0,
+                    max_value=100,
+                    key="temp_weight_gpqa",
+                    on_change=update_weight_gpqa,
+                    help="Ponderación de GPQA. Mide razonamiento de nivel de experto."
+                )
+                st.slider(
+                    "⚡ Peso de Velocidad",
                     min_value=0,
                     max_value=100,
                     key="temp_weight_speed",
@@ -1314,12 +1409,23 @@ else:
                     on_change=update_weight_efficiency,
                     help=efficiency_help
                 )
+                st.slider(
+                    "📏 Penalización por Tamaño de Parámetros (Menos Parámetros = Mejor)",
+                    min_value=0,
+                    max_value=100,
+                    key="temp_weight_model_size",
+                    on_change=update_weight_model_size,
+                    help="Permite penalizar modelos muy grandes y pesados, favoreciendo modelos más ligeros y eficientes en la clasificación final."
+                )
                 
                 st.markdown(f"""
-                <div style="background-color: #F2F2F2; padding: 6px 12px; border-radius: 6px; display: flex; justify-content: space-around; align-items: center; border: 1px solid #E5E7EB; margin-top: 8px;">
-                    <span style="font-size: 0.78rem; color: #0B0F19;">🧠 Calidad Técnica: <strong style="color: #0039AA;">{st.session_state.weight_quality}%</strong></span>
-                    <span style="font-size: 0.78rem; color: #0B0F19; border-left: 1px solid #D1D5DB; padding-left: 15px;">⚡ Velocidad: <strong style="color: #35CC29;">{st.session_state.weight_speed}%</strong></span>
-                    <span style="font-size: 0.78rem; color: #0B0F19; border-left: 1px solid #D1D5DB; padding-left: 15px;">💼 {efficiency_label.split(' ', 1)[-1]}: <strong style="color: #F6A229;">{st.session_state.weight_efficiency}%</strong></span>
+                <div style="background-color: #F2F2F2; padding: 6px 12px; border-radius: 6px; display: flex; flex-wrap: wrap; justify-content: space-around; align-items: center; border: 1px solid #E5E7EB; margin-top: 8px;">
+                    <span style="font-size: 0.74rem; color: #0B0F19; margin: 2px 4px;">⚖️ IFEval: <strong style="color: #0039AA;">{st.session_state.weight_ifeval}</strong></span>
+                    <span style="font-size: 0.74rem; color: #0B0F19; border-left: 1px solid #D1D5DB; padding-left: 8px; margin: 2px 4px;">🧠 MMLU: <strong style="color: #0039AA;">{st.session_state.weight_mmlu}</strong></span>
+                    <span style="font-size: 0.74rem; color: #0B0F19; border-left: 1px solid #D1D5DB; padding-left: 8px; margin: 2px 4px;">🧪 GPQA: <strong style="color: #0039AA;">{st.session_state.weight_gpqa}</strong></span>
+                    <span style="font-size: 0.74rem; color: #0B0F19; border-left: 1px solid #D1D5DB; padding-left: 8px; margin: 2px 4px;">⚡ Velocidad: <strong style="color: #35CC29;">{st.session_state.weight_speed}</strong></span>
+                    <span style="font-size: 0.74rem; color: #0B0F19; border-left: 1px solid #D1D5DB; padding-left: 8px; margin: 2px 4px;">💼 {efficiency_label.split(' ', 1)[-1]}: <strong style="color: #F6A229;">{st.session_state.weight_efficiency}</strong></span>
+                    <span style="font-size: 0.74rem; color: #0B0F19; border-left: 1px solid #D1D5DB; padding-left: 8px; margin: 2px 4px;">📏 Tamaño: <strong style="color: #B91C1C;">{st.session_state.weight_model_size}</strong></span>
                 </div>
                 """, unsafe_allow_html=True)
 
