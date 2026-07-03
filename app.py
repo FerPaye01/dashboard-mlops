@@ -296,8 +296,6 @@ if 'validated_model_name' not in st.session_state:
     st.session_state.validated_model_name = None
 if 'user_activity_rate' not in st.session_state:
     st.session_state.user_activity_rate = 0.40  # Porcentaje de tiempo que un usuario activo está pidiendo tokens
-if 'local_quantization' not in st.session_state:
-    st.session_state.local_quantization = "FP16 / BF16 (Nativo - 16 bits)"
 
 # Inicialización de las variables de la Fase 2 en st.session_state
 if 'weight_speed' not in st.session_state:
@@ -364,8 +362,6 @@ if 'temp_deployment_type' not in st.session_state:
     st.session_state.temp_deployment_type = st.session_state.deployment_type
 if 'temp_rows_per_page' not in st.session_state:
     st.session_state.temp_rows_per_page = st.session_state.rows_per_page
-if 'temp_local_quantization' not in st.session_state:
-    st.session_state.temp_local_quantization = st.session_state.local_quantization
 
 # Inicialización de las variables de Configuración Avanzada en st.session_state
 if 'gpus_tp' not in st.session_state:
@@ -453,8 +449,6 @@ def update_cache_hit_rate():
 def update_session_turns():
     st.session_state.session_turns = st.session_state.temp_session_turns
 
-def update_local_quantization():
-    st.session_state.local_quantization = st.session_state.temp_local_quantization
 
 
 
@@ -520,17 +514,9 @@ if st.session_state.validated_model is not None:
     model_num_kv_heads = int(model_metadata.get("num_kv_heads", 8))
     model_attention_type = model_metadata.get("attention_type", "GQA")
     
-    local_quant = st.session_state.local_quantization
-    if "FP16" in local_quant:
-        model_precision_bits = 16
-    elif "INT8" in local_quant:
-        model_precision_bits = 8
-    else:
-        model_precision_bits = 4
-
     vram_calc = estimate_vram_requirements(
         model_params_b=model_params_b,
-        precision_bits=model_precision_bits,
+        precision_bits=16,
         context_length=st.session_state.context_length,
         attention_type=model_attention_type,
         num_users=st.session_state.concurrent_users,
@@ -625,14 +611,7 @@ with st.sidebar:
         </div>
         """, unsafe_allow_html=True)
     
-    # Selector de Cuantización de Referencia
-    st.selectbox(
-        "🎚️ Cuantización de Referencia (Local)",
-        options=["FP16 / BF16 (Nativo - 16 bits)", "INT8 (8 bits)", "INT4 (Q4_K_M - 4 bits)"],
-        key="temp_local_quantization",
-        on_change=update_local_quantization,
-        help="Ajusta la precisión de los pesos de los modelos locales para recalcular toda la VRAM del catálogo de forma masiva."
-    )
+
     
     # Elemento 2: Slider de Longitud de Contexto
     st.slider(
@@ -805,14 +784,7 @@ else:
         hosting = row["hosting"]
         
         # 1. Calcular VRAM Peak para modelos locales
-        local_quant = st.session_state.local_quantization
-        if "FP16" in local_quant:
-            precision_bytes = 2.0
-        elif "INT8" in local_quant:
-            precision_bytes = 1.0
-        else: # INT4
-            precision_bytes = 0.56
-        
+        precision_bytes = 2.0 # FP16
         if attention_type == 'MLA':
             kv_bytes_per_token = (512 + 128) * layers * precision_bytes
         elif attention_type == 'GQA':
@@ -914,7 +886,6 @@ else:
         if hosting == "Solo Local (Privado / GGUF)":
             perf_dict = calculate_roofline_local_performance(
                 params_b=params_b,
-                kv_cache_total_gb=kv_cache_per_user_gb * st.session_state.concurrent_users,
                 bw=st.session_state.gpu_bw,
                 tflops=st.session_state.gpu_tflops,
                 gpus=st.session_state.gpus_tp,
@@ -929,7 +900,6 @@ else:
         else: # Híbrido / Both
             perf_local = calculate_roofline_local_performance(
                 params_b=params_b,
-                kv_cache_total_gb=kv_cache_per_user_gb * st.session_state.concurrent_users,
                 bw=st.session_state.gpu_bw,
                 tflops=st.session_state.gpu_tflops,
                 gpus=st.session_state.gpus_tp,
@@ -1079,7 +1049,7 @@ else:
                 st.rerun()
         
         # Definir las pestañas de la sección de clasificación
-        tab_tabla, tab_infraestructura, tab_filtros = st.tabs(["🏆 Clasificación de Modelos", "📊 Tablero de Infraestructura / Feature Engineering", "🎛️ Filtros y Configuración"])
+        tab_tabla, tab_filtros = st.tabs(["🏆 Clasificación de Modelos", "🎛️ Filtros y Configuración"])
         
         with tab_tabla:
             # Controles superiores: Buscador y selector de número de filas por página
@@ -1266,36 +1236,7 @@ else:
                     </div>
                     """, unsafe_allow_html=True)
 
-        with tab_infraestructura:
-            st.markdown("#### 📊 Tablero de Infraestructura / Feature Engineering")
-            st.markdown("""
-            Este tablero presenta las métricas físicas de inferencia calculadas para **todos los modelos** del catálogo, estimadas de forma dinámica en tiempo real según el contexto y usuarios concurrentes configurados en la barra lateral.
-            """)
-            
-            # Formatear el DataFrame con las columnas de Feature Engineering calculadas en el bucle
-            df_infra = pd.DataFrame()
-            df_infra["Modelo"] = df_catalog["Modelo"]
-            df_infra["Atención"] = df_catalog["Atención"]
-            df_infra["Parámetros (B)"] = df_catalog["_params_b"].map(lambda x: f"{x:.2f}B" if x > 0 else "N/A")
-            df_infra["VRAM Base (Estática + Activaciones)"] = df_catalog["_vram_base_gb"].map(lambda x: f"{x:.2f} GB" if x > 0 else "N/A (Cloud)")
-            df_infra["KV/Usuario (GB)"] = df_catalog["_kv_cache_user_gb"].map(lambda x: f"{x:.3f} GB" if x > 0 else "N/A (Cloud)")
-            df_infra["KV Cache Total (GB)"] = df_catalog["_kv_cache_total_gb"].map(lambda x: f"{x:.2f} GB" if x > 0 else "N/A (Cloud)")
-            df_infra["VRAM Peak Recomendada (GB)"] = df_catalog["_vram_peak_gb"].map(lambda x: f"{x:.2f} GB" if x > 0 else "N/A (Cloud)")
-            df_infra["Hardware Recomendado"] = df_catalog["_hw_sugerido"]
-            df_infra["Compatibilidad"] = df_catalog["Compatibilidad"]
-            
-            styled_infra = df_infra.style.map(
-                lambda x: "color: #EF4444; font-weight: bold;" if (isinstance(x, str) and "⚠️" in x) else ""
-            )
-            
-            st.dataframe(styled_infra, use_container_width=True, hide_index=True)
-            
-            st.info(
-                "💡 **Nota sobre las Fórmulas aplicadas:** "
-                "La VRAM Base incluye los pesos del modelo cuantizados más un 5% de activaciones. "
-                "La caché KV se calcula según la arquitectura de atención del modelo (MHA, GQA o MLA) para el contexto indicado. "
-                "La VRAM Peak añade un 20% de margen de seguridad y 2 GB de CUDA runtime."
-            )
+
 
         with tab_filtros:
             col_f1, col_f2 = st.columns(2)

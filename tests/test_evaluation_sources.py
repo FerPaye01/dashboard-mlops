@@ -14,7 +14,7 @@ def test_artificial_analysis_structure():
     """
     print("\n=== 1. Test Artificial Analysis API ===")
     api_key = os.getenv("ARTIFICIAL_ANALYSIS_API_KEY")
-    url = "https://artificialanalysis.ai/api/v2/language/models"
+    url = "https://artificialanalysis.ai/api/v2/llms/models"
     
     if api_key:
         print(f"API Key encontrada. Realizando peticion real a {url}...")

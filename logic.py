@@ -592,17 +592,17 @@ def fetch_huggingface_model_metadata(model_id: str) -> dict:
 
 def calculate_roofline_local_performance(
     params_b: float,
-    kv_cache_total_gb: float,
     bw: float,
     tflops: float,
     gpus: int,
     context_length: int
 ) -> dict:
-    w_size_gb = params_b * 2.0
-    total_memory_load_gb = w_size_gb + kv_cache_total_gb
+    w_size_gb = params_b * 2.0  # FP16 (2 bytes per weight)
     effective_bw = bw * gpus
-    theoretical_tokens_per_sec = effective_bw / total_memory_load_gb if total_memory_load_gb > 0 else 50.0
-    tokens_per_sec = min(180.0, max(2.0, theoretical_tokens_per_sec))
+    
+    # Pure roofline model for autoregressive decoding: BW (GB/s) / Model weights size (GB)
+    theoretical_tokens_per_sec = effective_bw / w_size_gb if w_size_gb > 0 else 50.0
+    tokens_per_sec = max(2.0, theoretical_tokens_per_sec)
     
     effective_tflops = tflops * gpus
     theoretical_ttft_ms = (2.0 * params_b * context_length) / effective_tflops if effective_tflops > 0 else 150.0
@@ -681,7 +681,6 @@ def fetch_physical_performance_metrics(model_id: str) -> dict:
     else:
         res = calculate_roofline_local_performance(
             params_b=params_b,
-            kv_cache_total_gb=2.0,
             bw=936.0,
             tflops=80.0,
             gpus=1,

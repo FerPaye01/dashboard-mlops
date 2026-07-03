@@ -1,0 +1,83 @@
+# Arquitectura del Sistema (agent.md)
+
+Define el stack tecnológico, patrones de arquitectura, convenciones propias y
+configuraciones granulares del proyecto. Se actualiza cuando cambia la arquitectura.
+
+---
+
+## 🛠️ Stack Tecnológico Base
+
+| Capa | Tecnología | Rol |
+|------|-----------|-----|
+| [Capa, ej: Frontend] | [Tecnología, ej: Angular 22] | [Rol en el sistema] |
+
+---
+
+## 🏛️ Flujo de Componentes y Datos
+
+```text
+[Diagrama de flujo del sistema — cómo viajan los datos entre capas]
+
+Ejemplo:
+[Cliente] ──▶ [API Gateway] ──▶ [Backend] ──▶ [Base de Datos]
+```
+
+---
+
+## 🔌 Patrones de Arquitectura
+
+[Describir patrones aplicados: ej. Provider intercambiable, CQRS, Event-driven, etc.]
+
+### Ejemplo de contrato abstracto (si aplica):
+```python
+# Interfaz común para proveedores intercambiables
+class Proveedor_Base(ABC):
+    @abstractmethod
+    async def ejecutar(self, datos: dict) -> dict: ...
+```
+
+---
+
+## 🤖 Agentes Especializados Disponibles
+
+[Listar los agentes disponibles para este proyecto]
+
+| Agente | Dominio técnico | Carpeta |
+|--------|----------------|---------|
+| [nombre_agente] | [Dominio, ej: Frontend Angular] | `.agent/agents/[nombre]/` |
+
+### 🔄 Ciclo de Vida de los Agentes Especializados
+- **Planificación Inicial**: Se pre-definen al inicio del proyecto (fase `/iniciar-proyecto`) si las capas lógicas básicas del stack (ej. Frontend SPA vs Backend API) lo exigen.
+- **Evolutivo Bajo Demanda**: Se crean únicamente cuando un nuevo módulo técnico complejo es introducido en el sistema (ej. integrando un motor de OCR o base de datos vectorial en sprints avanzados) y requiere gobernanza y reglas de desarrollo específicas.
+
+---
+
+## 📐 Principios Arquitectónicos
+
+1. [Principio 1, ej: Local-first — cero dependencia de cloud]
+2. [Principio 2, ej: Provider agnóstico — servicios intercambiables por config]
+3. [Principio 3]
+
+---
+
+## ⚙️ Convenciones y Configuraciones Granulares
+
+[Versiones pinneadas, etiquetados, métodos de llamada API, headers requeridos, etc.]
+
+```yaml
+# Convenciones técnicas
+gestor_paquetes: "pnpm"  # Usar siempre pnpm en lugar de npm o yarn
+version_python: ">=3.12"
+version_node: ">=22"
+api_prefix: "/api/v1"
+angular: "=22"
+
+```
+
+---
+
+## 🗺️ Mapeo de Módulos / Repositorios
+
+| Módulo / Repo | Rol en la arquitectura |
+|---------------|----------------------|
+| [nombre-repo] | [Descripción del rol] |
